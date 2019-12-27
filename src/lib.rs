@@ -1,9 +1,11 @@
+
+// https://play.rust-lang.org/?version=stable&mode=debug&edition=2015&gist=b38c87957a2f0194d030cf5424a84a49
+
 extern crate log;
 extern crate simple_logger;
 use log::debug;
-use crate::Terminate::{RanOffEnd, ProgramHalted};
+use crate::Terminate::{RanOffEnd, ProgramHalted, Unimplemented};
 use std::fs;
-use std::borrow::BorrowMut;
 
 #[cfg(test)]
 mod tests {
@@ -12,19 +14,19 @@ mod tests {
 
     #[test]
     fn test_interpreter_halt() {
-        let program: Vec<Box<dyn Instruction<Interpreter>>> = vec!(halt());
+        let program: Vec<Box<dyn Instruction>> = vec!(halt());
         Interpreter::new().execute(program).unwrap();
     }
 
     #[test]
     fn test_compiler_halt() {
-        let program: Vec<Box<dyn Instruction<Compiler>>> = vec!(haltc());
+        let program: Vec<Box<dyn Instruction>> = vec!(halt());
         Compiler::new().execute(program).unwrap();
     }
 
     #[test]
     fn test_interpreter_ran_off_end() {
-        let program: Vec<Box<dyn Instruction<Interpreter>>> = vec!(increment(0));
+        let program: Vec<Box<dyn Instruction>> = vec!(increment(0));
         let result = Interpreter::new().execute(program);
 
         assert_eq!(result.err(), Some(RanOffEnd))
@@ -32,13 +34,13 @@ mod tests {
 
     #[test]
     fn test_interpreter_increment() {
-        let program: Vec<Box<dyn Instruction<Interpreter>>> = vec!(increment(0), increment(0), halt());
+        let program: Vec<Box<dyn Instruction>> = vec!(increment(0), increment(0), halt());
         Interpreter::new().execute(program).unwrap();
     }
 
     #[test]
     fn test_interpreter_branch_equal() {
-        let program: Vec<Box<dyn Instruction<Interpreter>>> = vec!(increment(0),
+        let program: Vec<Box<dyn Instruction>> = vec!(increment(0),
                                                       increment(0),
                                                       increment(0),
                                                       increment(0),
@@ -55,17 +57,13 @@ const REGISTERS_SIZE: usize = 32;
 type Registers = [usize; REGISTERS_SIZE];
 
 mod instruction_set {
-    use crate::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction, Compiler};
+    use crate::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction};
 
     pub fn branch_not_equal(test: usize, value: usize, jump: usize) -> Box<dyn Instruction>{
         Box::new(BranchNotEqualInstruction { test, value, jump })
     }
 
     pub fn halt() -> Box<dyn Instruction>{
-        Box::new(HaltInstruction {})
-    }
-
-    pub fn haltc() -> Box<dyn Instruction<Compiler>>{
         Box::new(HaltInstruction {})
     }
 
@@ -76,15 +74,12 @@ mod instruction_set {
 
 #[derive(Debug, PartialEq)]
 pub enum Terminate {
-    RanOffEnd, ProgramHalted
+    RanOffEnd, ProgramHalted, Unimplemented
 }
 
-pub trait Instruction<Machine=Interpreter> {
-    fn process(&self, machine: &mut Machine) -> Result<usize, Terminate>;
-}
-
-pub trait ProgramExecutor<Machine=Self> {
-    fn execute(&mut self, program: Vec<Box<dyn Instruction<Machine>>>) -> Result<(), Terminate>;
+pub trait Instruction {
+    fn interpret(&self, interpreter: &mut Interpreter) -> Result<usize, Terminate>;
+    fn compile(&self, compiler: &mut Compiler) -> Result<usize, Terminate>;
 }
 
 #[derive(Debug, Clone)]
@@ -99,19 +94,7 @@ impl Compiler {
         }
     }
 
-    fn write_prologue(&mut self) {
-        self.program.push_str("global _start\n");
-        self.program.push_str("section .text\n");
-        self.program.push_str("_start:\n");
-    }
-
-    fn write_epilogue(&mut self) {
-        self.program.push_str(";;;;; Pushed with xmasvm...ho ho ho\n");
-    }
-}
-
-impl ProgramExecutor for Compiler {
-    fn execute(&mut self, program: Vec<Box<dyn Instruction<Compiler>>>) -> Result<(), Terminate> {
+    fn execute(&mut self, program: Vec<Box<dyn Instruction>>) -> Result<(), Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
         match simple_logger::init() { _ => {} }
 
@@ -122,7 +105,9 @@ impl ProgramExecutor for Compiler {
         for ipc  in 0..length {
             debug!("EMITTING IPC {}", ipc);
 
-            match program[ipc].process(self) {
+            let instruction = &*program[ipc];
+
+            match instruction.compile(self) {
                 Ok(_) => {},
                 Err(err) => { return Err(err) }
             }
@@ -133,6 +118,16 @@ impl ProgramExecutor for Compiler {
         fs::write("xmasvm.asm", &self.program).expect("Could not write asm file?");
 
         Ok(())
+    }
+
+    fn write_prologue(&mut self) {
+        self.program.push_str("global _start\n");
+        self.program.push_str("section .text\n");
+        self.program.push_str("_start:\n");
+    }
+
+    fn write_epilogue(&mut self) {
+        self.program.push_str(";;;;; Pushed with xmasvm...ho ho ho\n");
     }
 }
 
@@ -149,10 +144,8 @@ impl Interpreter {
             registers: [0; REGISTERS_SIZE]
         }
     }
-}
 
-impl ProgramExecutor for Interpreter {
-    fn execute(&mut self, program: Vec<Box<dyn Instruction<Interpreter>>>) -> Result<(), Terminate> {
+    fn execute(&mut self, program: Vec<Box<dyn Instruction>>) -> Result<(), Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
         match simple_logger::init() { _ => {} }
 
@@ -160,7 +153,9 @@ impl ProgramExecutor for Interpreter {
             debug!("EXECUTING IPC {}", self.ipc);
             if self.ipc >= program.len() { return Err(RanOffEnd); }
 
-            match program[self.ipc].process(self) {
+            let instruction = &*program[self.ipc];
+
+            match instruction.interpret(self) {
                 Ok(new_ipc) => { self.ipc = new_ipc },
                 Err(ProgramHalted) => { return Ok(()) } // better way?
                 Err(err) => { return Err(err) }
@@ -172,14 +167,12 @@ impl ProgramExecutor for Interpreter {
 #[derive(Debug, Clone)]
 struct HaltInstruction {}
 
-impl Instruction<Interpreter> for HaltInstruction {
-    fn process(&self, _machine: &mut Interpreter) -> Result<usize, Terminate> {
+impl Instruction for HaltInstruction {
+    fn interpret(&self, _interpreter: &mut Interpreter) -> Result<usize, Terminate> {
         Err(ProgramHalted)
     }
-}
 
-impl Instruction<Compiler> for HaltInstruction {
-    fn process(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
+    fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
         machine.program.push_str("    mov eax, 1              ; exit()\n");
         machine.program.push_str("    mov ebx, 0              ; status = 0\n");
         machine.program.push_str("    int 0x80                ; call exit\n");
@@ -192,12 +185,16 @@ struct IncrementInstruction {
     result: usize
 }
 
-impl Instruction<Interpreter> for IncrementInstruction {
-    fn process(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
+impl Instruction for IncrementInstruction {
+    fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.registers[self.result];
         machine.registers[self.result] = value + 1;
         debug!("REGISTER {} is now {}", self.result, machine.registers[self.result]);
         Ok(machine.ipc + 1)
+    }
+
+    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
+        Err(Unimplemented)
     }
 }
 
@@ -208,8 +205,8 @@ struct BranchNotEqualInstruction {
     jump: usize
 }
 
-impl Instruction<Interpreter> for BranchNotEqualInstruction {
-    fn process(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
+impl Instruction for BranchNotEqualInstruction {
+    fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let test = machine.registers[self.test];
         let value = machine.registers[self.value];
         if test != value {
@@ -217,6 +214,10 @@ impl Instruction<Interpreter> for BranchNotEqualInstruction {
         } else {
             Ok(machine.ipc + 1)
         }
+    }
+
+    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
+        Err(Unimplemented)
     }
 }
 
@@ -227,9 +228,13 @@ struct AddInstruction {
     result: usize
 }
 
-impl Instruction<Interpreter> for AddInstruction {
-    fn process(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
+impl Instruction for AddInstruction {
+    fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
         machine.registers[self.result] = machine.registers[self.operand1] + machine.registers[self.operand2];
         Ok(machine.ipc + 1)
+    }
+
+    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
+        Err(Unimplemented)
     }
 }
