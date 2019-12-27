@@ -1,6 +1,3 @@
-
-// https://play.rust-lang.org/?version=stable&mode=debug&edition=2015&gist=b38c87957a2f0194d030cf5424a84a49
-
 extern crate log;
 extern crate simple_logger;
 use log::debug;
@@ -35,7 +32,15 @@ mod tests {
     #[test]
     fn test_interpreter_increment() {
         let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0), increment(0), halt());
-        Interpreter::new(program).execute().unwrap();
+        let mut interpreter = Interpreter::new(program);
+
+        interpreter.step().unwrap();
+        assert_eq!(Ok(1), interpreter.register_read(0));
+
+        interpreter.step().unwrap();
+        assert_eq!(Ok(2), interpreter.register_read(0));
+
+        assert_eq!((), interpreter.execute().unwrap());
     }
 
     #[test]
@@ -182,16 +187,27 @@ impl Interpreter<'_> {
         match simple_logger::init() { _ => {} }
 
         loop {
-            debug!("EXECUTING IPC {}", self.ipc);
-            if self.ipc >= self.program.len() { return Err(RanOffEnd); }
-
-            let instruction = &*self.program[self.ipc];
-
-            match instruction.interpret(self) {
-                Ok(new_ipc) => { self.ipc = new_ipc },
+            match self.step() {
+                Ok(_) =>  {},
                 Err(ProgramHalted) => { return Ok(()) } // better way?
                 Err(err) => { return Err(err) }
             }
+        }
+    }
+
+    /// Step returns () on successful step and Terminate when it cannot.
+    fn step(&mut self) -> Result<(), Terminate> {
+        debug!("EXECUTING IPC {}", self.ipc);
+        if self.ipc >= self.program.len() { return Err(RanOffEnd); }
+
+        let instruction = &*self.program[self.ipc];
+
+        match instruction.interpret(self) {
+            Ok(new_ipc) => {
+                self.ipc = new_ipc;
+                Ok(())
+            },
+            Err(err) => { return Err(err) }
         }
     }
 
