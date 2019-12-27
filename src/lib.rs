@@ -14,8 +14,8 @@ mod tests {
 
     #[test]
     fn test_interpreter_halt() {
-        let program: Vec<Box<dyn Instruction>> = vec!(halt());
-        Interpreter::new().execute(program).unwrap();
+        let program: &Vec<Box<dyn Instruction>> = &vec!(halt());
+        Interpreter::new(program).execute().unwrap();
     }
 
     #[test]
@@ -26,21 +26,21 @@ mod tests {
 
     #[test]
     fn test_interpreter_ran_off_end() {
-        let program: Vec<Box<dyn Instruction>> = vec!(increment(0));
-        let result = Interpreter::new().execute(program);
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0));
+        let result = Interpreter::new(program).execute();
 
         assert_eq!(result.err(), Some(RanOffEnd))
     }
 
     #[test]
     fn test_interpreter_increment() {
-        let program: Vec<Box<dyn Instruction>> = vec!(increment(0), increment(0), halt());
-        Interpreter::new().execute(program).unwrap();
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0), increment(0), halt());
+        Interpreter::new(program).execute().unwrap();
     }
 
     #[test]
     fn test_interpreter_branch_equal() {
-        let program: Vec<Box<dyn Instruction>> = vec!(increment(0),
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0),
                                                       increment(0),
                                                       increment(0),
                                                       increment(0),
@@ -48,32 +48,24 @@ mod tests {
                                                       increment(1),
                                                       branch_not_equal(0, 1, 5),
                                                       halt());
-        Interpreter::new().execute(program).unwrap();
+        Interpreter::new(program).execute().unwrap();
     }
 
     #[test]
-    fn test_interpreter_push() {
-        let program: Vec<Box<dyn Instruction>> = vec!(increment(0), push(0),  // S: 1.
+    fn test_interpreter_push_and_stack_management_functions() {
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0), push(0),  // S: 1.
                                                       increment(0), push(0),  // S: 2, 1.
                                                       halt());
-        let mut interpreter = Interpreter::new();
+        let mut interpreter = Interpreter::new(program);
 
-        interpreter.execute(program).unwrap();
+        assert_eq!(0, interpreter.stack_size());
+        assert_eq!(Err(StackEmpty), interpreter.stack_peek(0));
+
+        interpreter.execute().unwrap();
 
         assert_eq!(2, interpreter.stack_size());
         assert_eq!(2, interpreter.stack_peek(0).unwrap());
         assert_eq!(1, interpreter.stack_peek(1).unwrap());
-    }
-
-    #[test]
-    fn test_interpreter_stack_empty() {
-        let program: Vec<Box<dyn Instruction>> = vec!(halt());
-        let mut interpreter = Interpreter::new();
-
-        interpreter.execute(program).unwrap();
-
-        assert_eq!(0, interpreter.stack_size());
-        assert_eq!(Err(StackEmpty), interpreter.stack_peek(0));
     }
 }
 
@@ -161,8 +153,7 @@ impl Compiler {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Interpreter {
+pub struct Interpreter<'a> {
     /// Instruction Pointer Counter - Which Instruction are we on in the program?
     ipc: usize,
     /// Stack pointer - Current index of where next stack element will be pushed
@@ -170,28 +161,31 @@ pub struct Interpreter {
     /// All out potential registers
     registers: Registers,
     /// Stack
-    stack: Vec<i32>
+    stack: Vec<i32>,
+
+    program: &'a Vec<Box<dyn Instruction>>
 }
 
-impl Interpreter {
-    fn new() -> Interpreter {
+impl Interpreter<'_> {
+    fn new<'a>(program: &'a Vec<Box<dyn Instruction>>) -> Interpreter {
         Interpreter {
             ipc: 0,
             sp: 0,
             registers: [0; REGISTERS_SIZE],
-            stack: Vec::with_capacity(STACK_SIZE)
+            stack: Vec::with_capacity(STACK_SIZE),
+            program
         }
     }
 
-    fn execute(&mut self, program: Vec<Box<dyn Instruction>>) -> Result<(), Terminate> {
+    fn execute(&mut self) -> Result<(), Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
         match simple_logger::init() { _ => {} }
 
         loop {
             debug!("EXECUTING IPC {}", self.ipc);
-            if self.ipc >= program.len() { return Err(RanOffEnd); }
+            if self.ipc >= self.program.len() { return Err(RanOffEnd); }
 
-            let instruction = &*program[self.ipc];
+            let instruction = &*self.program[self.ipc];
 
             match instruction.interpret(self) {
                 Ok(new_ipc) => { self.ipc = new_ipc },
