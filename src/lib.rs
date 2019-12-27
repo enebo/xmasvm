@@ -4,7 +4,7 @@
 extern crate log;
 extern crate simple_logger;
 use log::debug;
-use crate::Terminate::{RanOffEnd, ProgramHalted, Unimplemented, StackEmpty};
+use crate::Terminate::{RanOffEnd, ProgramHalted, Unimplemented, StackEmpty, RegisterInvalid};
 use std::fs;
 
 #[cfg(test)]
@@ -53,12 +53,16 @@ mod tests {
 
     #[test]
     fn test_interpreter_push() {
-        let program: Vec<Box<dyn Instruction>> = vec!(increment(0), push(0), halt());
+        let program: Vec<Box<dyn Instruction>> = vec!(increment(0), push(0),  // S: 1.
+                                                      increment(0), push(0),  // S: 2, 1.
+                                                      halt());
         let mut interpreter = Interpreter::new();
 
         interpreter.execute(program).unwrap();
 
-        assert_eq!(1, interpreter.stack_peek().unwrap());
+        assert_eq!(2, interpreter.stack_size());
+        assert_eq!(2, interpreter.stack_peek(0).unwrap());
+        assert_eq!(1, interpreter.stack_peek(1).unwrap());
     }
 
     #[test]
@@ -68,7 +72,8 @@ mod tests {
 
         interpreter.execute(program).unwrap();
 
-        assert_eq!(Err(StackEmpty), interpreter.stack_peek());
+        assert_eq!(0, interpreter.stack_size());
+        assert_eq!(Err(StackEmpty), interpreter.stack_peek(0));
     }
 }
 
@@ -99,7 +104,7 @@ mod instruction_set {
 
 #[derive(Debug, PartialEq)]
 pub enum Terminate {
-    RanOffEnd, ProgramHalted, Unimplemented, StackEmpty
+    RanOffEnd, ProgramHalted, Unimplemented, StackEmpty, RegisterInvalid
 }
 
 pub trait Instruction {
@@ -196,13 +201,27 @@ impl Interpreter {
         }
     }
 
-    fn stack_peek(&self) -> Result<i32, Terminate> {
-        // FIXME: This will panic once we exceed i32 should Err instead
-        if self.sp == 0 {
+    fn register_read(&self, register: usize) -> Result<i32, Terminate> {
+        if register > REGISTERS_SIZE {
+            Err(RegisterInvalid)
+        } else {
+            Ok(self.registers[register])
+        }
+    }
+
+    fn stack_peek(&self, delta: i32) -> Result<i32, Terminate> {
+        // FIXME: This will panic once we exceed i32 should Err(StackOverflow) instead
+        let index: i32 = self.sp as i32 - delta - 1;
+
+        if index < 0 {
             Err(StackEmpty)
         } else {
-            Ok(*self.stack.get(self.sp - 1).unwrap())
+            Ok(*self.stack.get(index as usize).unwrap())
         }
+    }
+
+    fn stack_size(&self) -> usize {
+        self.sp
     }
 }
 
@@ -290,6 +309,23 @@ impl Instruction for PushInstruction {
     fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
         machine.stack.push(machine.registers[self.source]);
         machine.sp += 1;
+        Ok(machine.ipc + 1)
+    }
+
+    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
+        Err(Unimplemented)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PopInstruction {
+    result: usize
+}
+
+impl Instruction for PopInstruction {
+    fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
+        machine.registers[self.result] = machine.stack.pop().unwrap();
+        machine.sp -= 1;
         Ok(machine.ipc + 1)
     }
 
