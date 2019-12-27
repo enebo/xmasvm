@@ -3,6 +3,7 @@ extern crate simple_logger;
 use log::debug;
 use crate::Terminate::{RanOffEnd, ProgramHalted, Unimplemented, StackEmpty, RegisterInvalid};
 use std::fs;
+use std::fmt::Debug;
 
 #[cfg(test)]
 mod tests {
@@ -57,20 +58,29 @@ mod tests {
     }
 
     #[test]
-    fn test_interpreter_push_and_stack_management_functions() {
+    fn test_interpreter_push_pop() {
         let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0), push(0),  // S: 1.
-                                                      increment(0), push(0),  // S: 2, 1.
-                                                      halt());
+                                                        increment(0), push(0),  // S: 2, 1.
+                                                        pop(1),  // S: 1.
+                                                        halt());
         let mut interpreter = Interpreter::new(program);
 
         assert_eq!(0, interpreter.stack_size());
         assert_eq!(Err(StackEmpty), interpreter.stack_peek(0));
 
-        interpreter.execute().unwrap();
+        interpreter.step_n(4).unwrap();
 
         assert_eq!(2, interpreter.stack_size());
         assert_eq!(2, interpreter.stack_peek(0).unwrap());
         assert_eq!(1, interpreter.stack_peek(1).unwrap());
+
+        interpreter.step().unwrap();
+
+        assert_eq!(1, interpreter.stack_size());
+        assert_eq!(1, interpreter.stack_peek(0).unwrap());
+        assert_eq!(2, interpreter.register_read(1).unwrap());
+
+        interpreter.execute().unwrap();
     }
 }
 
@@ -80,7 +90,7 @@ const STACK_SIZE: usize = 1024 * 1024;
 type Registers = [i32; REGISTERS_SIZE];
 
 mod instruction_set {
-    use crate::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction, PushInstruction};
+    use crate::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction, PushInstruction, PopInstruction};
 
     pub fn branch_not_equal(test: usize, value: usize, jump: usize) -> Box<dyn Instruction>{
         Box::new(BranchNotEqualInstruction { test, value, jump })
@@ -90,12 +100,16 @@ mod instruction_set {
         Box::new(HaltInstruction {})
     }
 
-    pub fn increment(register: usize) -> Box<dyn Instruction>{
-        Box::new(IncrementInstruction { result: register })
+    pub fn increment(result: usize) -> Box<dyn Instruction>{
+        Box::new(IncrementInstruction { result })
     }
 
     pub fn push(source: usize) -> Box<dyn Instruction>{
         Box::new(PushInstruction { source })
+    }
+
+    pub fn pop(result: usize) -> Box<dyn Instruction>{
+        Box::new(PopInstruction { result })
     }
 }
 
@@ -104,7 +118,7 @@ pub enum Terminate {
     RanOffEnd, ProgramHalted, Unimplemented, StackEmpty, RegisterInvalid
 }
 
-pub trait Instruction {
+pub trait Instruction : Debug {
     fn interpret(&self, interpreter: &mut Interpreter) -> Result<usize, Terminate>;
     fn compile(&self, compiler: &mut Compiler) -> Result<usize, Terminate>;
 }
@@ -197,10 +211,10 @@ impl Interpreter<'_> {
 
     /// Step returns () on successful step and Terminate when it cannot.
     fn step(&mut self) -> Result<(), Terminate> {
-        debug!("EXECUTING IPC {}", self.ipc);
         if self.ipc >= self.program.len() { return Err(RanOffEnd); }
 
         let instruction = &*self.program[self.ipc];
+        debug!("EXECUTING IPC {} = {:?}; SP: {}", self.ipc, instruction, self.sp);
 
         match instruction.interpret(self) {
             Ok(new_ipc) => {
@@ -209,6 +223,16 @@ impl Interpreter<'_> {
             },
             Err(err) => { return Err(err) }
         }
+    }
+
+    fn step_n(&mut self, count: usize) -> Result<(), Terminate> {
+        for i in 0..count {
+            if let Err(err) = self.step() {
+                return Err(err)
+            }
+        }
+
+        Ok(())
     }
 
     fn register_read(&self, register: usize) -> Result<i32, Terminate> {
