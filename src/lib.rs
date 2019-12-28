@@ -4,6 +4,7 @@ use log::debug;
 use crate::Terminate::{RanOffEnd, ProgramHalted, Unimplemented, StackEmpty, RegisterInvalid};
 use std::fs;
 use std::fmt::Debug;
+use std::process::{Command, Output};
 
 #[cfg(test)]
 mod tests {
@@ -19,7 +20,7 @@ mod tests {
     #[test]
     fn test_compiler_halt() {
         let program: Vec<Box<dyn Instruction>> = vec!(halt());
-        Compiler::new().execute(program).unwrap();
+        assert!(Compiler::new().execute(program).unwrap().status.success());
     }
 
     #[test]
@@ -135,7 +136,7 @@ impl Compiler {
         }
     }
 
-    fn execute(&mut self, program: Vec<Box<dyn Instruction>>) -> Result<(), Terminate> {
+    fn execute(&mut self, program: Vec<Box<dyn Instruction>>) -> Result<Output, Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
         match simple_logger::init() { _ => {} }
 
@@ -158,7 +159,27 @@ impl Compiler {
 
         fs::write("xmasvm.asm", &self.program).expect("Could not write asm file?");
 
-        Ok(())
+        self.generate_executable();
+        Ok(self.call_executable())
+    }
+
+    fn generate_executable(&self) {
+        Command::new("nasm")
+            .arg("-f").arg("elf32")
+            .arg("xmasvm.asm")
+            .arg("-o").arg("xmasvm.o")
+            .output().expect("Could not execute nasm");
+
+        Command::new("ld")
+            .arg("-m").arg("elf_i386")
+            .arg("xmasvm.o")
+            .arg("-o").arg("xmasvm")
+            .output().expect("Count not execute ld");
+    }
+
+    fn call_executable(&self) -> Output {
+        let program = Command::new("./xmasvm").output().expect("Could not find xmasvm");
+        program
     }
 
     fn write_prologue(&mut self) {
