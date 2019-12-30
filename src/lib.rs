@@ -10,6 +10,7 @@ use std::process::{Command, Output};
 mod tests {
     use super::*;
     use super::instruction_set::*;
+    use crate::Tag::Direct;
 
     #[test]
     fn test_interpreter_halt() {
@@ -25,7 +26,8 @@ mod tests {
 
     #[test]
     fn test_interpreter_ran_off_end() {
-        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0));
+        let a = &Operand { tag: Direct, value: 0};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(a));
         let result = Interpreter::new(program).execute();
 
         assert_eq!(result.err(), Some(RanOffEnd))
@@ -33,7 +35,8 @@ mod tests {
 
     #[test]
     fn test_interpreter_increment() {
-        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0), increment(0), halt());
+        let a = &Operand { tag: Direct, value: 0};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(a), increment(a), halt());
         let mut interpreter = Interpreter::new(program);
 
         interpreter.step().unwrap();
@@ -47,22 +50,26 @@ mod tests {
 
     #[test]
     fn test_interpreter_branch_equal() {
-        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0),
-                                                      increment(0),
-                                                      increment(0),
-                                                      increment(0),
-                                                      increment(0),
-                                                      increment(1),
-                                                      branch_not_equal(0, 1, 5),
+        let a = &Operand { tag: Direct, value: 0};
+        let b = &Operand { tag: Direct, value: 1};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(a),
+                                                      increment(a),
+                                                      increment(a),
+                                                      increment(a),
+                                                      increment(a),
+                                                      increment(b),
+                                                      branch_not_equal(a, b, 5),
                                                       halt());
         Interpreter::new(program).execute().unwrap();
     }
 
     #[test]
     fn test_interpreter_push_pop() {
-        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(0), push(0),  // S: 1.
-                                                        increment(0), push(0),  // S: 2, 1.
-                                                        pop(1),  // S: 1.
+        let a = &Operand { tag: Direct, value: 0};
+        let b = &Operand { tag: Direct, value: 1};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(a), push(0),  // S: 1.
+                                                        increment(a), push(0),  // S: 2, 1.
+                                                        pop(b),  // S: 1.
                                                         halt());
         let mut interpreter = Interpreter::new(program);
 
@@ -91,9 +98,9 @@ const STACK_SIZE: usize = 1024 * 1024;
 type Registers = [i32; REGISTERS_SIZE];
 
 mod instruction_set {
-    use crate::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction, PushInstruction, PopInstruction};
+    use crate::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction, PushInstruction, PopInstruction, Operand};
 
-    pub fn branch_not_equal(test: usize, value: usize, jump: usize) -> Box<dyn Instruction>{
+    pub fn branch_not_equal(test: &'static Operand, value: &'static Operand, jump: usize) -> Box<dyn Instruction>{
         Box::new(BranchNotEqualInstruction { test, value, jump })
     }
 
@@ -101,7 +108,7 @@ mod instruction_set {
         Box::new(HaltInstruction {})
     }
 
-    pub fn increment(result: usize) -> Box<dyn Instruction>{
+    pub fn increment(result: &'static Operand) -> Box<dyn Instruction>{
         Box::new(IncrementInstruction { result })
     }
 
@@ -109,7 +116,7 @@ mod instruction_set {
         Box::new(PushInstruction { source })
     }
 
-    pub fn pop(result: usize) -> Box<dyn Instruction>{
+    pub fn pop(result: &'static Operand) -> Box<dyn Instruction>{
         Box::new(PopInstruction { result })
     }
 }
@@ -122,6 +129,15 @@ pub enum Terminate {
 pub trait Instruction : Debug {
     fn interpret(&self, interpreter: &mut Interpreter) -> Result<usize, Terminate>;
     fn compile(&self, compiler: &mut Compiler) -> Result<usize, Terminate>;
+}
+
+#[derive(Debug, Clone)]
+enum Tag { Direct, Indirect, Value }
+
+#[derive(Debug, Clone)]
+pub struct Operand {
+    tag: Tag,
+    value: i32
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +294,26 @@ impl Interpreter<'_> {
     fn stack_size(&self) -> usize {
         self.sp
     }
+
+    fn value(&self, operand: &Operand) -> i32 {
+        match operand {
+            Operand { tag: Direct, value: d} => self.registers[*d as usize],
+            Operand { tag: Indirect, value: d} => self.registers[self.registers[*d as usize] as usize],
+            Operand { tag: Value, value: d} => *d,
+        }
+    }
+
+    fn store(&mut self, operand: &Operand, value: i32) -> i32 {
+        // FIXME: Should error is value is this or should we use Regster as a type of Operand
+        match operand {
+            Operand { tag: Direct, value: d} => self.registers[*d as usize] = value,
+            Operand { tag: Indirect, value: d} => self.registers[self.registers[*d as usize] as usize] = value,
+            Operand { tag: Value, value: d} => panic!("Store boom fix"),
+        }
+
+        value
+    }
+
 }
 
 #[derive(Debug, Clone)]
@@ -297,34 +333,37 @@ impl Instruction for HaltInstruction {
 }
 
 #[derive(Debug, Clone)]
-struct IncrementInstruction {
-    result: usize
+struct IncrementInstruction<'a> {
+    result: &'a Operand
 }
 
-impl Instruction for IncrementInstruction {
-    fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
-        let value = machine.registers[self.result];
-        machine.registers[self.result] = value + 1;
-        debug!("REGISTER {} is now {}", self.result, machine.registers[self.result]);
+impl <'a> Instruction for IncrementInstruction<'a> {
+    fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
+        let value = machine.value(&self.result);
+        machine.store(&self.result, value + 1);
+        debug!("REGISTER {:?} is now {}", self.result, machine.value(&self.result));
         Ok(machine.ipc + 1)
     }
 
-    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
-        Err(Unimplemented)
+    fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
+        machine.program.push_str("    inc ");
+        // FIXME:
+//        machine.program.push_str(machine.register_for(self.result));
+        Ok(0)
     }
 }
 
 #[derive(Debug,Clone)]
-struct BranchNotEqualInstruction {
-    test: usize,
-    value: usize,
+struct BranchNotEqualInstruction<'a> {
+    test: &'a Operand,
+    value: &'a Operand,
     jump: usize
 }
 
-impl Instruction for BranchNotEqualInstruction {
+impl <'a> Instruction for BranchNotEqualInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
-        let test = machine.registers[self.test];
-        let value = machine.registers[self.value];
+        let test = machine.value(&self.test);
+        let value = machine.value(&self.value);
         if test != value {
             Ok(self.jump)
         } else {
@@ -373,13 +412,14 @@ impl Instruction for PushInstruction {
 }
 
 #[derive(Debug, Clone)]
-struct PopInstruction {
-    result: usize
+struct PopInstruction<'a> {
+    result: &'a Operand
 }
 
-impl Instruction for PopInstruction {
+impl <'a> Instruction for PopInstruction<'a> {
     fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
-        machine.registers[self.result] = machine.stack.pop().unwrap();
+        let value = machine.stack.pop().unwrap();
+        machine.store(&self.result, value);
         machine.sp -= 1;
         Ok(machine.ipc + 1)
     }
