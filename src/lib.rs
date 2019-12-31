@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 mod tests {
     use super::*;
     use super::instruction_set::*;
-    use crate::Tag::Direct;
+    use crate::Tage::{Direct, Literal};
 
     #[test]
     fn test_interpreter_halt() {
@@ -40,26 +40,37 @@ mod tests {
         let mut interpreter = Interpreter::new(program);
 
         interpreter.step().unwrap();
-        assert_eq!(Ok(1), interpreter.register_read(0));
+        assert_eq!(1, interpreter.value(a));
 
         interpreter.step().unwrap();
-        assert_eq!(Ok(2), interpreter.register_read(0));
+        assert_eq!(2, interpreter.value(a));
 
         assert_eq!((), interpreter.execute().unwrap());
+    }
+
+    #[test]
+    fn test_interpreter_add() {
+        let a = &Operand { tag: Direct, value: 0};
+        let five = &Operand { tag: Literal, value: 5};
+        let one = &Operand { tag: Literal, value: 1};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(add(a, five, one), halt());
+        let mut interpreter = Interpreter::new(program);
+
+        interpreter.execute().unwrap();
+
+        assert_eq!(6, interpreter.value(a));
     }
 
     #[test]
     fn test_interpreter_branch_equal() {
         let a = &Operand { tag: Direct, value: 0};
         let b = &Operand { tag: Direct, value: 1};
-        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(a),
-                                                      increment(a),
-                                                      increment(a),
-                                                      increment(a),
-                                                      increment(a),
-                                                      increment(b),
-                                                      branch_not_equal(a, b, 5),
-                                                      halt());
+        let five = &Operand { tag: Literal, value: 5};
+        let one = &Operand { tag: Literal, value: 1};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(store(a, five),
+                                                        increment(b),
+                                                        branch_not_equal(a, b, one),
+                                                        halt());
         Interpreter::new(program).execute().unwrap();
     }
 
@@ -67,8 +78,8 @@ mod tests {
     fn test_interpreter_push_pop() {
         let a = &Operand { tag: Direct, value: 0};
         let b = &Operand { tag: Direct, value: 1};
-        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(a), push(0),  // S: 1.
-                                                        increment(a), push(0),  // S: 2, 1.
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(a), push(a),  // S: 1.
+                                                        increment(a), push(a),  // S: 2, 1.
                                                         pop(b),  // S: 1.
                                                         halt());
         let mut interpreter = Interpreter::new(program);
@@ -98,9 +109,14 @@ const STACK_SIZE: usize = 1024 * 1024;
 type Registers = [i32; REGISTERS_SIZE];
 
 mod instruction_set {
-    use crate::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction, PushInstruction, PopInstruction, Operand};
+    use crate::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction,
+                PushInstruction, PopInstruction, Operand, StoreInstruction, AddInstruction};
 
-    pub fn branch_not_equal(test: &'static Operand, value: &'static Operand, jump: usize) -> Box<dyn Instruction>{
+    pub fn add(result: &'static Operand, operand1: &'static Operand, operand2: &'static Operand) -> Box<dyn Instruction>{
+        Box::new(AddInstruction { result, operand1, operand2 })
+    }
+
+    pub fn branch_not_equal(test: &'static Operand, value: &'static Operand, jump: &'static Operand) -> Box<dyn Instruction>{
         Box::new(BranchNotEqualInstruction { test, value, jump })
     }
 
@@ -112,12 +128,16 @@ mod instruction_set {
         Box::new(IncrementInstruction { result })
     }
 
-    pub fn push(source: usize) -> Box<dyn Instruction>{
+    pub fn push(source: &'static Operand) -> Box<dyn Instruction>{
         Box::new(PushInstruction { source })
     }
 
     pub fn pop(result: &'static Operand) -> Box<dyn Instruction>{
         Box::new(PopInstruction { result })
+    }
+
+    pub fn store(result: &'static Operand, value: &'static Operand) -> Box<dyn Instruction>{
+        Box::new(StoreInstruction { result, value })
     }
 }
 
@@ -132,11 +152,11 @@ pub trait Instruction : Debug {
 }
 
 #[derive(Debug, Clone)]
-enum Tag { Direct, Indirect, Value }
+pub enum Tage { Direct, Indirect, Literal }
 
 #[derive(Debug, Clone)]
 pub struct Operand {
-    tag: Tag,
+    tag: Tage,
     value: i32
 }
 
@@ -263,7 +283,7 @@ impl Interpreter<'_> {
     }
 
     fn step_n(&mut self, count: usize) -> Result<(), Terminate> {
-        for i in 0..count {
+        for _ in 0..count {
             if let Err(err) = self.step() {
                 return Err(err)
             }
@@ -296,19 +316,19 @@ impl Interpreter<'_> {
     }
 
     fn value(&self, operand: &Operand) -> i32 {
-        match operand {
-            Operand { tag: Direct, value: d} => self.registers[*d as usize],
-            Operand { tag: Indirect, value: d} => self.registers[self.registers[*d as usize] as usize],
-            Operand { tag: Value, value: d} => *d,
+        match operand.tag {
+            Tage::Direct => { self.registers[operand.value as usize] },
+            Tage::Indirect => { self.registers[self.registers[operand.value as usize] as usize] },
+            Tage::Literal => { operand.value }
         }
     }
 
     fn store(&mut self, operand: &Operand, value: i32) -> i32 {
         // FIXME: Should error is value is this or should we use Regster as a type of Operand
-        match operand {
-            Operand { tag: Direct, value: d} => self.registers[*d as usize] = value,
-            Operand { tag: Indirect, value: d} => self.registers[self.registers[*d as usize] as usize] = value,
-            Operand { tag: Value, value: d} => panic!("Store boom fix"),
+        match operand.tag {
+            Tage::Direct => self.registers[operand.value as usize] = value,
+            Tage::Indirect => self.registers[self.registers[operand.value as usize] as usize] = value,
+            Tage::Literal => panic!("Store boom fix")
         }
 
         value
@@ -357,15 +377,16 @@ impl <'a> Instruction for IncrementInstruction<'a> {
 struct BranchNotEqualInstruction<'a> {
     test: &'a Operand,
     value: &'a Operand,
-    jump: usize
+    jump: &'a Operand
 }
 
+// FIXME: write test showing what happens is a Value is used for register but is bogus.
 impl <'a> Instruction for BranchNotEqualInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let test = machine.value(&self.test);
         let value = machine.value(&self.value);
         if test != value {
-            Ok(self.jump)
+            Ok(machine.value(&self.jump) as usize)
         } else {
             Ok(machine.ipc + 1)
         }
@@ -377,15 +398,16 @@ impl <'a> Instruction for BranchNotEqualInstruction<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct AddInstruction {
-    operand1: usize,
-    operand2: usize,
-    result: usize
+struct AddInstruction<'a> {
+    operand1: &'a Operand,
+    operand2: &'a Operand,
+    result: &'a Operand
 }
 
-impl Instruction for AddInstruction {
-    fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
-        machine.registers[self.result] = machine.registers[self.operand1] + machine.registers[self.operand2];
+impl <'a> Instruction for AddInstruction<'a>  {
+    fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
+        let sum = machine.value(&self.operand1) + machine.value(&self.operand2);
+        machine.store(&self.result, sum);
         Ok(machine.ipc + 1)
     }
 
@@ -395,13 +417,14 @@ impl Instruction for AddInstruction {
 }
 
 #[derive(Debug, Clone)]
-struct PushInstruction {
-    source: usize
+struct PushInstruction<'a> {
+    source: &'a Operand
 }
 
-impl Instruction for PushInstruction {
+impl <'a> Instruction for PushInstruction<'a> {
     fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
-        machine.stack.push(machine.registers[self.source]);
+        let value = machine.value(self.source);
+        machine.stack.push(value);
         machine.sp += 1;
         Ok(machine.ipc + 1)
     }
@@ -425,6 +448,24 @@ impl <'a> Instruction for PopInstruction<'a> {
     }
 
     fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
+        Err(Unimplemented)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StoreInstruction <'a> {
+    result: &'a Operand,
+    value: &'a Operand
+}
+
+impl <'a> Instruction for StoreInstruction<'a> {
+    fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
+        let value = machine.value(self.value);
+        machine.store(&self.result, value);
+        Ok(machine.ipc + 1)
+    }
+
+    fn compile(&self, _compiler: &mut Compiler) -> Result<usize, Terminate> {
         Err(Unimplemented)
     }
 }
