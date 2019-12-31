@@ -5,13 +5,12 @@ use crate::Terminate::{RanOffEnd, ProgramHalted, Unimplemented, StackEmpty, Regi
 use std::fs;
 use std::fmt::Debug;
 use std::process::{Command, Output};
-use crate::Tage::Literal;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use super::instruction_set::*;
-    use crate::Tage::{Direct, Literal};
+    use crate::Tag::{Direct, Literal};
 
     #[test]
     fn test_interpreter_halt() {
@@ -93,16 +92,29 @@ mod tests {
     }
 
     #[test]
-    fn test_interpreter_branch_equal() {
+    fn test_interpreter_branch_not_equal() {
         let a = &Operand { tag: Direct, value: 0};
         let b = &Operand { tag: Direct, value: 1};
         let five = &Operand { tag: Literal, value: 5};
-        let one = &Operand { tag: Literal, value: 1};
         let program: &Vec<Box<dyn Instruction>> = &vec!(store(a, five),
                                                         increment(b),
-                                                        branch_not_equal(a, b, one),
+                                                        branch_not_equal(a, b, 1),
                                                         halt());
         Interpreter::new(program).execute().unwrap();
+    }
+
+    #[test]
+    fn test_compiler_branch_not_equal() {
+        let a = &Operand { tag: Direct, value: 0};
+        let b = &Operand { tag: Direct, value: 1};
+        // Jump past second increment so halt reports 1 instead of 2.
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(b),
+                                                        branch_not_equal(a, b, 3),
+                                                        increment(b),
+                                                        halt());
+        let mut compiler = Compiler::new(program);
+
+        assert_eq!(1, compiler.execute().unwrap().status.code().unwrap());
     }
 
     #[test]
@@ -147,7 +159,7 @@ mod instruction_set {
         Box::new(AddInstruction { result, operand1, operand2 })
     }
 
-    pub fn branch_not_equal(test: &'static Operand, value: &'static Operand, jump: &'static Operand) -> Box<dyn Instruction>{
+    pub fn branch_not_equal(test: &'static Operand, value: &'static Operand, jump: usize) -> Box<dyn Instruction>{
         Box::new(BranchNotEqualInstruction { test, value, jump })
     }
 
@@ -180,14 +192,17 @@ pub enum Terminate {
 pub trait Instruction : Debug {
     fn interpret(&self, interpreter: &mut Interpreter) -> Result<usize, Terminate>;
     fn compile(&self, compiler: &mut Compiler) -> Result<usize, Terminate>;
+    fn jump_location(&self) -> Option<usize> {
+        None
+    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Tage { Direct, Indirect, Literal }
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub enum Tag { Direct, Indirect, Literal }
 
 #[derive(Debug, Clone)]
 pub struct Operand {
-    tag: Tage,
+    tag: Tag,
     value: i32
 }
 
@@ -212,6 +227,22 @@ impl Compiler<'_> {
         }
     }
 
+    /// Walk all instructions and mark up a list of where labels should be created
+    fn calculate_labels(&self) -> Vec<usize> {
+        let length = self.program.len();
+        let mut labels: Vec<usize> = vec![0; length];
+
+        for i in 0..length {
+            let instruction = &*self.program[i];
+
+            if let Some(jump_location) = instruction.jump_location() {
+                labels[jump_location] = i;
+            }
+        }
+
+        labels
+    }
+
     fn call_executable(&self) -> Output {
         let program = Command::new("./xmasvm").output().expect("Could not find xmasvm");
         program
@@ -221,6 +252,8 @@ impl Compiler<'_> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
         match simple_logger::init() { _ => {} }
 
+        let labels = self.calculate_labels();
+
         self.write_prologue();
 
         let length = self.program.len();
@@ -229,6 +262,12 @@ impl Compiler<'_> {
             debug!("EMITTING IPC {}", ipc);
 
             let instruction = &*self.program[ipc];
+
+            if labels[ipc] != 0 {
+                self.output.push_str("\n_");
+                self.output.push_str(ipc.to_string().as_ref());
+                self.output.push_str(":\n");
+            }
 
             match instruction.compile(self) {
                 Ok(_) => {},
@@ -261,11 +300,13 @@ impl Compiler<'_> {
     }
 
     fn native_register_for(&self, operand: &Operand) -> Result<String, Terminate> {
-        if operand.tag == Tage::Literal { return Err(RegisterInvalid) }
+        if operand.tag == Tag::Literal { return Err(RegisterInvalid) }
 
-        match operand.value {
-            0 => { Ok("eax".parse().unwrap()) },
-            1 => { Ok("ebx".parse().unwrap()) },
+        match (operand.value, operand.tag) {
+            (0, Tag::Direct) => { Ok("eax".parse().unwrap()) },
+            (0, Tag::Indirect) => { Ok("[eax]".parse().unwrap()) },
+            (1, Tag::Direct) => { Ok("ebx".parse().unwrap()) },
+            (1, Tag::Indirect) => { Ok("[ebx]".parse().unwrap()) },
             _ => { Err(RegisterInvalid)}
         }
     }
@@ -274,9 +315,29 @@ impl Compiler<'_> {
         let register = self.native_register_for(operand);
 
         match register {
-            Err(RegisterInvalid) if operand.tag == Tage::Literal =>  { Ok(operand.value.to_string()) },
+            Err(RegisterInvalid) if operand.tag == Tag::Literal =>  { Ok(operand.value.to_string()) },
             _ => { register }
         }
+    }
+
+    // FIXME: Feels these two should be combined into variadic function
+    // FIXME: Allow optional comment as parameter
+    fn add_instr(&mut self, x86instr: &str, operand: &str) {
+        self.output.push_str("    ");
+        self.output.push_str(x86instr);
+        self.output.push(' ');
+        self.output.push_str(operand);
+        self.output.push('\n');
+    }
+
+    fn add_instr_two(&mut self, x86instr: &str, operand1: &str, operand2: &str) {
+        self.output.push_str("    ");
+        self.output.push_str(x86instr);
+        self.output.push(' ');
+        self.output.push_str(operand1);
+        self.output.push_str(", ");
+        self.output.push_str(operand2);
+        self.output.push('\n');
     }
 
     fn write_prologue(&mut self) {
@@ -378,18 +439,18 @@ impl Interpreter<'_> {
 
     fn value(&self, operand: &Operand) -> i32 {
         match operand.tag {
-            Tage::Direct => { self.registers[operand.value as usize] },
-            Tage::Indirect => { self.registers[self.registers[operand.value as usize] as usize] },
-            Tage::Literal => { operand.value }
+            Tag::Direct => { self.registers[operand.value as usize] },
+            Tag::Indirect => { self.registers[self.registers[operand.value as usize] as usize] },
+            Tag::Literal => { operand.value }
         }
     }
 
     fn store(&mut self, operand: &Operand, value: i32) -> i32 {
         // FIXME: Should error is value is this or should we use Regster as a type of Operand
         match operand.tag {
-            Tage::Direct => self.registers[operand.value as usize] = value,
-            Tage::Indirect => self.registers[self.registers[operand.value as usize] as usize] = value,
-            Tage::Literal => panic!("Store boom fix")
+            Tag::Direct => self.registers[operand.value as usize] = value,
+            Tag::Indirect => self.registers[self.registers[operand.value as usize] as usize] = value,
+            Tag::Literal => panic!("Store boom fix")
         }
 
         value
@@ -427,10 +488,8 @@ impl <'a> Instruction for IncrementInstruction<'a> {
     }
 
     fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
-        machine.output.push_str("    inc ");
         let register = machine.native_register_for(self.result).unwrap();
-        machine.output.push_str(register.as_str());
-        machine.output.push('\n');
+        machine.add_instr("inc", register.as_str());
         Ok(0)
     }
 }
@@ -439,7 +498,7 @@ impl <'a> Instruction for IncrementInstruction<'a> {
 struct BranchNotEqualInstruction<'a> {
     test: &'a Operand,
     value: &'a Operand,
-    jump: &'a Operand
+    jump: usize
 }
 
 // FIXME: write test showing what happens is a Value is used for register but is bogus.
@@ -448,14 +507,29 @@ impl <'a> Instruction for BranchNotEqualInstruction<'a> {
         let test = machine.value(&self.test);
         let value = machine.value(&self.value);
         if test != value {
-            Ok(machine.value(&self.jump) as usize)
+            Ok(self.jump)
         } else {
             Ok(machine.ipc + 1)
         }
     }
 
-    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
-        Err(Unimplemented)
+    fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
+        let test = machine.native_register_or_value(&self.test).unwrap();
+        let value = machine.native_register_or_value(&self.value).unwrap();
+        let mut jump_string = String::new();
+
+        jump_string.push('_');
+        jump_string.push_str(self.jump.to_string().as_str());
+
+        machine.add_instr_two("cmp", test.as_str(), value.as_str());
+        machine.add_instr("jne", jump_string.as_str());
+
+        Ok(0)
+    }
+
+    // FIXME: jump should become non-operandd?
+    fn jump_location(&self) -> Option<usize> {
+        Some(self.jump)
     }
 }
 
@@ -479,17 +553,9 @@ impl <'a> Instruction for AddInstruction<'a>  {
         let operand2 = machine.native_register_or_value(self.operand2).unwrap();
 
         if result != operand1 {
-            machine.output.push_str("    mov ");
-            machine.output.push_str(result.as_str());
-            machine.output.push_str(", ");
-            machine.output.push_str(operand1.as_str());
-            machine.output.push('\n');
+            machine.add_instr_two("mov", result.as_str(), operand1.as_str());
         }
-        machine.output.push_str("    add ");
-        machine.output.push_str(result.as_str());
-        machine.output.push_str(", ");
-        machine.output.push_str(operand2.as_str());
-        machine.output.push('\n');
+        machine.add_instr_two("add", result.as_str(), operand2.as_str());
         Ok(0)
     }
 }
