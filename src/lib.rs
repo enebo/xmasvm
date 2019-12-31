@@ -5,6 +5,7 @@ use crate::Terminate::{RanOffEnd, ProgramHalted, Unimplemented, StackEmpty, Regi
 use std::fs;
 use std::fmt::Debug;
 use std::process::{Command, Output};
+use crate::Tage::Literal;
 
 #[cfg(test)]
 mod tests {
@@ -20,8 +21,8 @@ mod tests {
 
     #[test]
     fn test_compiler_halt() {
-        let program: Vec<Box<dyn Instruction>> = vec!(halt());
-        assert!(Compiler::new().execute(program).unwrap().status.success());
+        let program: &Vec<Box<dyn Instruction>> = &vec!(halt());
+        assert!(Compiler::new(program).execute().unwrap().status.success());
     }
 
     #[test]
@@ -35,17 +36,26 @@ mod tests {
 
     #[test]
     fn test_interpreter_increment() {
-        let a = &Operand { tag: Direct, value: 0};
-        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(a), increment(a), halt());
+        let b = &Operand { tag: Direct, value: 0};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(b), increment(b), halt());
         let mut interpreter = Interpreter::new(program);
 
         interpreter.step().unwrap();
-        assert_eq!(1, interpreter.value(a));
+        assert_eq!(1, interpreter.value(b));
 
         interpreter.step().unwrap();
-        assert_eq!(2, interpreter.value(a));
+        assert_eq!(2, interpreter.value(b));
 
         assert_eq!((), interpreter.execute().unwrap());
+    }
+
+    #[test]
+    fn test_compiler_increment() {
+        let b = &Operand { tag: Direct, value: 1};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(b), increment(b), halt());
+        let mut compiler = Compiler::new(program);
+
+        assert_eq!(2, compiler.execute().unwrap().status.code().unwrap());
     }
 
     #[test]
@@ -59,6 +69,27 @@ mod tests {
         interpreter.execute().unwrap();
 
         assert_eq!(6, interpreter.value(a));
+    }
+
+    #[test]
+    fn test_compiler_add() {
+        let b = &Operand { tag: Direct, value: 1};
+        let five = &Operand { tag: Literal, value: 5};
+        let one = &Operand { tag: Literal, value: 1};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(add(b, five, one), halt());
+        let mut compiler = Compiler::new(program);
+
+        assert_eq!(6, compiler.execute().unwrap().status.code().unwrap());
+    }
+
+    #[test]
+    fn test_compiler_add_no_mov() {
+        let b = &Operand { tag: Direct, value: 1};
+        let five = &Operand { tag: Literal, value: 5};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(add(b, b, five), halt());
+        let mut compiler = Compiler::new(program);
+
+        assert_eq!(5, compiler.execute().unwrap().status.code().unwrap());
     }
 
     #[test]
@@ -151,7 +182,7 @@ pub trait Instruction : Debug {
     fn compile(&self, compiler: &mut Compiler) -> Result<usize, Terminate>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Tage { Direct, Indirect, Literal }
 
 #[derive(Debug, Clone)]
@@ -161,29 +192,43 @@ pub struct Operand {
 }
 
 #[derive(Debug, Clone)]
-pub struct Compiler {
-    program: String
+pub struct Compiler<'a> {
+    program: &'a Vec<Box<dyn Instruction>>,
+    output: String
 }
 
-impl Compiler {
-    fn new() -> Compiler {
+/// Compiler targetting x86(32) nasm.
+///
+/// The instruction set was pretty arbitrarily chosen and intentionally not exactly
+/// x86.  As such there needs to be some mappings.  For example, register 0 will end
+/// up mapping to eax.  If for some reason an x86 instr ends up putting something into
+/// eax then it may wipe out our original user of register 0.
+impl Compiler<'_> {
+    fn new<'a>(program: &'a Vec<Box<dyn Instruction>>) -> Compiler {
         Compiler {
-            program: String::new()
+            program: program,
+            /// Input to be written out for 'nasm' to assemble.
+            output: String::new()
         }
     }
 
-    fn execute(&mut self, program: Vec<Box<dyn Instruction>>) -> Result<Output, Terminate> {
+    fn call_executable(&self) -> Output {
+        let program = Command::new("./xmasvm").output().expect("Could not find xmasvm");
+        program
+    }
+
+    fn execute(&mut self) -> Result<Output, Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
         match simple_logger::init() { _ => {} }
 
         self.write_prologue();
 
-        let length = program.len();
+        let length = self.program.len();
 
         for ipc  in 0..length {
             debug!("EMITTING IPC {}", ipc);
 
-            let instruction = &*program[ipc];
+            let instruction = &*self.program[ipc];
 
             match instruction.compile(self) {
                 Ok(_) => {},
@@ -193,7 +238,9 @@ impl Compiler {
 
         self.write_epilogue();
 
-        fs::write("xmasvm.asm", &self.program).expect("Could not write asm file?");
+        debug!("NASM OUTPUT:\n{}", self.output);
+
+        fs::write("xmasvm.asm", &self.output).expect("Could not write asm file?");
 
         self.generate_executable();
         Ok(self.call_executable())
@@ -213,19 +260,33 @@ impl Compiler {
             .output().expect("Count not execute ld");
     }
 
-    fn call_executable(&self) -> Output {
-        let program = Command::new("./xmasvm").output().expect("Could not find xmasvm");
-        program
+    fn native_register_for(&self, operand: &Operand) -> Result<String, Terminate> {
+        if operand.tag == Tage::Literal { return Err(RegisterInvalid) }
+
+        match operand.value {
+            0 => { Ok("eax".parse().unwrap()) },
+            1 => { Ok("ebx".parse().unwrap()) },
+            _ => { Err(RegisterInvalid)}
+        }
+    }
+
+    fn native_register_or_value(&self, operand: &Operand) -> Result<String, Terminate> {
+        let register = self.native_register_for(operand);
+
+        match register {
+            Err(RegisterInvalid) if operand.tag == Tage::Literal =>  { Ok(operand.value.to_string()) },
+            _ => { register }
+        }
     }
 
     fn write_prologue(&mut self) {
-        self.program.push_str("global _start\n");
-        self.program.push_str("section .text\n");
-        self.program.push_str("_start:\n");
+        self.output.push_str("global _start\n");
+        self.output.push_str("section .text\n");
+        self.output.push_str("_start:\n");
     }
 
     fn write_epilogue(&mut self) {
-        self.program.push_str(";;;;; Pushed with xmasvm...ho ho ho\n");
+        self.output.push_str(";;;;; Pushed with xmasvm...ho ho ho\n");
     }
 }
 
@@ -345,9 +406,8 @@ impl Instruction for HaltInstruction {
     }
 
     fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
-        machine.program.push_str("    mov eax, 1              ; exit()\n");
-        machine.program.push_str("    mov ebx, 0              ; status = 0\n");
-        machine.program.push_str("    int 0x80                ; call exit\n");
+        machine.output.push_str("    mov eax, 1              ; exit()\n");
+        machine.output.push_str("    int 0x80                ; call exit\n");
         Ok(0)
     }
 }
@@ -357,6 +417,7 @@ struct IncrementInstruction<'a> {
     result: &'a Operand
 }
 
+// FIXME: Add tests for using literals where registers expected for both interp and compiler
 impl <'a> Instruction for IncrementInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.value(&self.result);
@@ -366,9 +427,10 @@ impl <'a> Instruction for IncrementInstruction<'a> {
     }
 
     fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
-        machine.program.push_str("    inc ");
-        // FIXME:
-//        machine.program.push_str(machine.register_for(self.result));
+        machine.output.push_str("    inc ");
+        let register = machine.native_register_for(self.result).unwrap();
+        machine.output.push_str(register.as_str());
+        machine.output.push('\n');
         Ok(0)
     }
 }
@@ -411,8 +473,24 @@ impl <'a> Instruction for AddInstruction<'a>  {
         Ok(machine.ipc + 1)
     }
 
-    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
-        Err(Unimplemented)
+    fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
+        let result = machine.native_register_for(self.result).unwrap();
+        let operand1 = machine.native_register_or_value(self.operand1).unwrap();
+        let operand2 = machine.native_register_or_value(self.operand2).unwrap();
+
+        if result != operand1 {
+            machine.output.push_str("    mov ");
+            machine.output.push_str(result.as_str());
+            machine.output.push_str(", ");
+            machine.output.push_str(operand1.as_str());
+            machine.output.push('\n');
+        }
+        machine.output.push_str("    add ");
+        machine.output.push_str(result.as_str());
+        machine.output.push_str(", ");
+        machine.output.push_str(operand2.as_str());
+        machine.output.push('\n');
+        Ok(0)
     }
 }
 
