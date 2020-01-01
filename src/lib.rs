@@ -189,7 +189,7 @@ pub enum Terminate {
     RanOffEnd, ProgramHalted, Unimplemented, StackEmpty, RegisterInvalid
 }
 
-pub trait Instruction : Debug {
+pub trait Instruction : Debug + ToString {
     fn interpret(&self, interpreter: &mut Interpreter) -> Result<usize, Terminate>;
     fn compile(&self, compiler: &mut Compiler) -> Result<usize, Terminate>;
     fn jump_location(&self) -> Option<usize> {
@@ -206,6 +206,18 @@ pub struct Operand {
     value: i32
 }
 
+impl ToString for Operand {
+    fn to_string(&self) -> String {
+        format!("{}{}",
+                match self.tag {
+                    Tag::Direct=> 'd',
+                    Tag::Indirect => 'i',
+                    Tag::Literal => 'l'
+                },
+                self.value.to_string())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Compiler<'a> {
     program: &'a Vec<Box<dyn Instruction>>,
@@ -213,24 +225,26 @@ pub struct Compiler<'a> {
 }
 
 macro_rules! addi_expand {
-    ($str:expr, ($arg:expr,)) => {{
+    ($instr:expr, $str:expr, ($arg:expr,)) => {{
         $str.push_str($arg);
+        $str.push_str("\t\t\t\t; ");
+        $str.push_str(&$instr.to_string());
         $str.push('\n');
     }};
 
-    ($str:expr, ($arg:expr, $($rest:expr,)*)) => {{
+    ($instr:expr, $str:expr, ($arg:expr, $($rest:expr,)*)) => {{
         $str.push_str($arg);
         $str.push_str(", ");
-        addi_expand!($str, ($($rest,)*))
+        addi_expand!($instr, $str, ($($rest,)*))
     }};
 }
 
 macro_rules! addi {
-    ($str:expr, $instr:expr, $($e:expr),*) => {{
-        $str.push_str("    ");
-        $str.push_str($instr);
-        $str.push(' ');
-        addi_expand!($str, ($($e,)*))
+    ($instr:expr, $machine:expr, $opcode:expr, $($e:expr),*) => {{
+        $machine.output.push_str("    ");
+        $machine.output.push_str($opcode);
+        $machine.output.push(' ');
+        addi_expand!($instr, $machine.output, ($($e,)*))
     }}
 }
 
@@ -465,14 +479,20 @@ impl Interpreter<'_> {
 #[derive(Debug, Clone)]
 struct HaltInstruction {}
 
+impl ToString for HaltInstruction {
+    fn to_string(&self) -> String {
+        "Halt".parse().unwrap()
+    }
+}
+
 impl Instruction for HaltInstruction {
     fn interpret(&self, _interpreter: &mut Interpreter) -> Result<usize, Terminate> {
         Err(ProgramHalted)
     }
 
     fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
-        machine.output.push_str("    mov eax, 1              ; exit()\n");
-        machine.output.push_str("    int 0x80                ; call exit\n");
+        addi!(self, machine, "mov", "eax", "1");
+        addi!(self, machine, "int", "0x80");
         Ok(0)
     }
 }
@@ -480,6 +500,12 @@ impl Instruction for HaltInstruction {
 #[derive(Debug, Clone)]
 struct IncrementInstruction<'a> {
     result: &'a Operand
+}
+
+impl <'a> ToString for IncrementInstruction<'a> {
+    fn to_string(&self) -> String {
+        format!("Increment result: {}", self.result.to_string())
+    }
 }
 
 // FIXME: Add tests for using literals where registers expected for both interp and compiler
@@ -493,7 +519,7 @@ impl <'a> Instruction for IncrementInstruction<'a> {
 
     fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
         let register = machine.native_register_for(self.result).unwrap();
-        addi!(machine.output, "inc", register.as_str());
+        addi!(self, machine, "inc", register.as_str());
         Ok(0)
     }
 }
@@ -503,6 +529,15 @@ struct BranchNotEqualInstruction<'a> {
     test: &'a Operand,
     value: &'a Operand,
     jump: usize
+}
+
+impl <'a> ToString for BranchNotEqualInstruction<'a> {
+    fn to_string(&self) -> String {
+        format!("BranchNotEqual test: {} value: {}, jump: {}",
+                self.test.to_string(),
+                self.value.to_string(),
+                self.jump.to_string())
+    }
 }
 
 // FIXME: write test showing what happens is a Value is used for register but is bogus.
@@ -525,8 +560,8 @@ impl <'a> Instruction for BranchNotEqualInstruction<'a> {
         jump_string.push('_');
         jump_string.push_str(self.jump.to_string().as_str());
 
-        addi!(machine.output, "cmp", test.as_str(), value.as_str());
-        addi!(machine.output, "jne", jump_string.as_str());
+        addi!(self, machine, "cmp", test.as_str(), value.as_str());
+        addi!(self, machine, "jne", jump_string.as_str());
 
         Ok(0)
     }
@@ -544,6 +579,15 @@ struct AddInstruction<'a> {
     result: &'a Operand
 }
 
+impl <'a> ToString for AddInstruction<'a> {
+    fn to_string(&self) -> String {
+        format!("Add result: {}, operand1: {}, operand2 {}",
+            self.result.to_string(),
+            self.operand1.to_string(),
+            self.operand2.to_string())
+    }
+}
+
 impl <'a> Instruction for AddInstruction<'a>  {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let sum = machine.value(&self.operand1) + machine.value(&self.operand2);
@@ -557,9 +601,9 @@ impl <'a> Instruction for AddInstruction<'a>  {
         let operand2 = machine.native_register_or_value(self.operand2).unwrap();
 
         if result != operand1 {
-            addi!(machine.output, "mov", result.as_str(), operand1.as_str());
+            addi!(self, machine, "mov", result.as_str(), operand1.as_str());
         }
-        addi!(machine.output, "add", result.as_str(), operand2.as_str());
+        addi!(self, machine, "add", result.as_str(), operand2.as_str());
         Ok(0)
     }
 }
@@ -567,6 +611,12 @@ impl <'a> Instruction for AddInstruction<'a>  {
 #[derive(Debug, Clone)]
 struct PushInstruction<'a> {
     source: &'a Operand
+}
+
+impl <'a> ToString for PushInstruction<'a> {
+    fn to_string(&self) -> String {
+        format!("Push source: {}", self.source.to_string())
+    }
 }
 
 impl <'a> Instruction for PushInstruction<'a> {
@@ -587,6 +637,12 @@ struct PopInstruction<'a> {
     result: &'a Operand
 }
 
+impl <'a> ToString for PopInstruction<'a> {
+    fn to_string(&self) -> String {
+        format!("Pop result: {}", self.result.to_string())
+    }
+}
+
 impl <'a> Instruction for PopInstruction<'a> {
     fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.stack.pop().unwrap();
@@ -604,6 +660,15 @@ impl <'a> Instruction for PopInstruction<'a> {
 struct StoreInstruction <'a> {
     result: &'a Operand,
     value: &'a Operand
+}
+
+impl <'a> ToString for StoreInstruction<'a> {
+    fn to_string(&self) -> String {
+        format!("Store result: {}, value: {}",
+            self.result.to_string(),
+            self.value.to_string(),
+        )
+    }
 }
 
 impl <'a> Instruction for StoreInstruction<'a> {
