@@ -34,18 +34,47 @@ mod tests {
     }
 
     #[test]
+    fn test_interpreter_invalid_store() {
+        let program: &Vec<Box<dyn Instruction>> = &vec!(halt());
+        let mut interpreter = Interpreter::new(program);
+        let value = &Operand { tag: Literal, value: 0 };
+
+        let result = interpreter.store(&value, 0);
+
+        assert_eq!(result.err(), Some(RegisterInvalid));
+    }
+
+    #[test]
+    fn test_interpreter_store_invalid_result() {
+        let b = &Operand { tag: Literal, value: 0};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(store(b, b), halt());
+        let result = Interpreter::new(program).execute();
+
+        assert_eq!(result.err(), Some(RegisterInvalid));
+    }
+
+    #[test]
     fn test_interpreter_increment() {
         let b = &Operand { tag: Direct, value: 0};
         let program: &Vec<Box<dyn Instruction>> = &vec!(increment(b), increment(b), halt());
         let mut interpreter = Interpreter::new(program);
 
         interpreter.step().unwrap();
-        assert_eq!(1, interpreter.value(b));
+        assert_eq!(interpreter.value(b), 1);
 
         interpreter.step().unwrap();
-        assert_eq!(2, interpreter.value(b));
+        assert_eq!(interpreter.value(b), 2);
 
-        assert_eq!((), interpreter.execute().unwrap());
+        assert_eq!(interpreter.execute().unwrap(), ());
+    }
+
+    #[test]
+    fn test_interpreter_increment_invalid_result() {
+        let b = &Operand { tag: Literal, value: 0};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(increment(b), increment(b), halt());
+        let result = Interpreter::new(program).execute();
+
+        assert_eq!(result.err(), Some(RegisterInvalid));
     }
 
     #[test]
@@ -54,7 +83,7 @@ mod tests {
         let program: &Vec<Box<dyn Instruction>> = &vec!(increment(b), increment(b), halt());
         let mut compiler = Compiler::new(program);
 
-        assert_eq!(2, compiler.execute().unwrap().status.code().unwrap());
+        assert_eq!(compiler.execute().unwrap().status.code().unwrap(), 2);
     }
 
     #[test]
@@ -67,7 +96,7 @@ mod tests {
 
         interpreter.execute().unwrap();
 
-        assert_eq!(6, interpreter.value(a));
+        assert_eq!(interpreter.value(a), 6);
     }
 
     #[test]
@@ -78,7 +107,16 @@ mod tests {
         let program: &Vec<Box<dyn Instruction>> = &vec!(add(b, five, one), halt());
         let mut compiler = Compiler::new(program);
 
-        assert_eq!(6, compiler.execute().unwrap().status.code().unwrap());
+        assert_eq!(compiler.execute().unwrap().status.code().unwrap(), 6);
+    }
+
+    #[test]
+    fn test_interpreter_add_invalid_result() {
+        let b = &Operand { tag: Literal, value: 0};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(add(b, b, b), halt());
+        let result = Interpreter::new(program).execute();
+
+        assert_eq!(result.err(), Some(RegisterInvalid));
     }
 
     #[test]
@@ -88,7 +126,7 @@ mod tests {
         let program: &Vec<Box<dyn Instruction>> = &vec!(add(b, b, five), halt());
         let mut compiler = Compiler::new(program);
 
-        assert_eq!(5, compiler.execute().unwrap().status.code().unwrap());
+        assert_eq!(compiler.execute().unwrap().status.code().unwrap(), 5);
     }
 
     #[test]
@@ -114,7 +152,7 @@ mod tests {
                                                         halt());
         let mut compiler = Compiler::new(program);
 
-        assert_eq!(1, compiler.execute().unwrap().status.code().unwrap());
+        assert_eq!(compiler.execute().unwrap().status.code().unwrap(), 1);
     }
 
     #[test]
@@ -127,22 +165,31 @@ mod tests {
                                                         halt());
         let mut interpreter = Interpreter::new(program);
 
-        assert_eq!(0, interpreter.stack_size());
-        assert_eq!(Err(StackEmpty), interpreter.stack_peek(0));
+        assert_eq!(interpreter.stack_size(), 0);
+        assert_eq!(interpreter.stack_peek(0), Err(StackEmpty));
 
         interpreter.step_n(4).unwrap();
 
-        assert_eq!(2, interpreter.stack_size());
-        assert_eq!(2, interpreter.stack_peek(0).unwrap());
-        assert_eq!(1, interpreter.stack_peek(1).unwrap());
+        assert_eq!(interpreter.stack_size(), 2);
+        assert_eq!(interpreter.stack_peek(0).unwrap(), 2);
+        assert_eq!(interpreter.stack_peek(1).unwrap(), 1);
 
         interpreter.step().unwrap();
 
-        assert_eq!(1, interpreter.stack_size());
-        assert_eq!(1, interpreter.stack_peek(0).unwrap());
-        assert_eq!(2, interpreter.register_read(1).unwrap());
+        assert_eq!(interpreter.stack_size(), 1);
+        assert_eq!(interpreter.stack_peek(0).unwrap(), 1);
+        assert_eq!(interpreter.register_read(1).unwrap(), 2);
 
         interpreter.execute().unwrap();
+    }
+
+    #[test]
+    fn test_interpreter_pop_invalid_result() {
+        let b = &Operand { tag: Literal, value: 0};
+        let program: &Vec<Box<dyn Instruction>> = &vec!(push(b), pop(b), halt());
+        let result = Interpreter::new(program).execute();
+
+        assert_eq!(result.err(), Some(RegisterInvalid));
     }
 }
 
@@ -356,8 +403,6 @@ impl Compiler<'_> {
         }
     }
 
-    // FIXME: Allow optional comment as parameter
-
     fn write_prologue(&mut self) {
         self.output.push_str("global _start\n");
         self.output.push_str("section .text\n");
@@ -463,15 +508,14 @@ impl Interpreter<'_> {
         }
     }
 
-    fn store(&mut self, operand: &Operand, value: i32) -> i32 {
-        // FIXME: Should error is value is this or should we use Regster as a type of Operand
+    fn store(&mut self, operand: &Operand, value: i32) -> Result<i32, Terminate> {
         match operand.tag {
             Tag::Direct => self.registers[operand.value as usize] = value,
             Tag::Indirect => self.registers[self.registers[operand.value as usize] as usize] = value,
-            Tag::Literal => panic!("Store boom fix")
+            Tag::Literal => return Err(Terminate::RegisterInvalid)
         }
 
-        value
+        Ok(value)
     }
 
 }
@@ -508,11 +552,10 @@ impl <'a> ToString for IncrementInstruction<'a> {
     }
 }
 
-// FIXME: Add tests for using literals where registers expected for both interp and compiler
 impl <'a> Instruction for IncrementInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.value(&self.result);
-        machine.store(&self.result, value + 1);
+        machine.store(&self.result, value + 1)?;
         debug!("REGISTER {:?} is now {}", self.result, machine.value(&self.result));
         Ok(machine.ipc + 1)
     }
@@ -540,7 +583,6 @@ impl <'a> ToString for BranchNotEqualInstruction<'a> {
     }
 }
 
-// FIXME: write test showing what happens is a Value is used for register but is bogus.
 impl <'a> Instruction for BranchNotEqualInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let test = machine.value(&self.test);
@@ -566,7 +608,6 @@ impl <'a> Instruction for BranchNotEqualInstruction<'a> {
         Ok(0)
     }
 
-    // FIXME: jump should become non-operandd?
     fn jump_location(&self) -> Option<usize> {
         Some(self.jump)
     }
@@ -591,7 +632,7 @@ impl <'a> ToString for AddInstruction<'a> {
 impl <'a> Instruction for AddInstruction<'a>  {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let sum = machine.value(&self.operand1) + machine.value(&self.operand2);
-        machine.store(&self.result, sum);
+        machine.store(&self.result, sum)?;
         Ok(machine.ipc + 1)
     }
 
@@ -646,7 +687,7 @@ impl <'a> ToString for PopInstruction<'a> {
 impl <'a> Instruction for PopInstruction<'a> {
     fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.stack.pop().unwrap();
-        machine.store(&self.result, value);
+        machine.store(&self.result, value)?;
         machine.sp -= 1;
         Ok(machine.ipc + 1)
     }
@@ -674,7 +715,7 @@ impl <'a> ToString for StoreInstruction<'a> {
 impl <'a> Instruction for StoreInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.value(self.value);
-        machine.store(&self.result, value);
+        machine.store(&self.result, value)?;
         Ok(machine.ipc + 1)
     }
 
