@@ -1,9 +1,9 @@
 extern crate log;
 extern crate simple_logger;
-use log::debug;
-use crate::{Registers, REGISTERS_SIZE, STACK_SIZE, Terminate};
 use crate::instruction::Instruction;
 use crate::operand::{Operand, Tag};
+use crate::{Registers, Terminate, REGISTERS_SIZE, STACK_SIZE};
+use log::debug;
 
 pub struct Interpreter<'a> {
     /// Instruction Pointer Counter - Which Instruction are we on in the program?
@@ -15,7 +15,7 @@ pub struct Interpreter<'a> {
     /// Stack
     pub(crate) stack: Vec<i32>,
 
-    program: &'a Vec<Box<dyn Instruction>>
+    program: &'a Vec<Box<dyn Instruction>>,
 }
 
 impl Interpreter<'_> {
@@ -25,43 +25,50 @@ impl Interpreter<'_> {
             sp: 0,
             registers: [0; REGISTERS_SIZE],
             stack: Vec::with_capacity(STACK_SIZE),
-            program
+            program,
         }
     }
 
     pub(crate) fn execute(&mut self) -> Result<(), Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
-        match simple_logger::init() { _ => {} }
+        match simple_logger::init() {
+            _ => {}
+        }
 
         loop {
             match self.step() {
-                Ok(_) =>  {},
-                Err(Terminate::ProgramHalted) => { return Ok(()) } // better way?
-                Err(err) => { return Err(err) }
+                Ok(_) => {}
+                Err(Terminate::ProgramHalted) => return Ok(()), // better way?
+                Err(err) => return Err(err),
             }
         }
     }
 
     /// Step returns () on successful step and Terminate when it cannot.
     pub(crate) fn step(&mut self) -> Result<(), Terminate> {
-        if self.ipc >= self.program.len() { return Err(Terminate::RanOffEnd); }
+        if self.ipc >= self.program.len() {
+            return Err(Terminate::RanOffEnd);
+        }
 
         let instruction = &*self.program[self.ipc];
-        debug!("EXECUTING IPC {} = {:?}; SP: {}", self.ipc, instruction, self.sp);
+        debug!(
+            "EXECUTING IPC {} = {:?}; SP: {}",
+            self.ipc, instruction, self.sp
+        );
 
         match instruction.interpret(self) {
             Ok(new_ipc) => {
                 self.ipc = new_ipc;
                 Ok(())
-            },
-            Err(err) => { return Err(err) }
+            }
+            Err(err) => return Err(err),
         }
     }
 
     pub(crate) fn step_n(&mut self, count: usize) -> Result<(), Terminate> {
         for _ in 0..count {
             if let Err(err) = self.step() {
-                return Err(err)
+                return Err(err);
             }
         }
 
@@ -93,17 +100,19 @@ impl Interpreter<'_> {
 
     pub(crate) fn value(&self, operand: &Operand) -> i32 {
         match operand.tag {
-            Tag::Direct => { self.registers[operand.value as usize] },
-            Tag::Indirect => { self.registers[self.registers[operand.value as usize] as usize] },
-            Tag::Literal => { operand.value }
+            Tag::Direct => self.registers[operand.value as usize],
+            Tag::Indirect => self.registers[self.registers[operand.value as usize] as usize],
+            Tag::Literal => operand.value,
         }
     }
 
     pub(crate) fn store(&mut self, operand: &Operand, value: i32) -> Result<i32, Terminate> {
         match operand.tag {
             Tag::Direct => self.registers[operand.value as usize] = value,
-            Tag::Indirect => self.registers[self.registers[operand.value as usize] as usize] = value,
-            Tag::Literal => return Err(Terminate::RegisterInvalid)
+            Tag::Indirect => {
+                self.registers[self.registers[operand.value as usize] as usize] = value
+            }
+            Tag::Literal => return Err(Terminate::RegisterInvalid),
         }
 
         Ok(value)

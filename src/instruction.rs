@@ -1,42 +1,56 @@
 extern crate log;
 extern crate simple_logger;
+use crate::compiler::Compiler;
+use crate::interpreter::Interpreter;
+use crate::operand::Operand;
+use crate::Terminate;
 use log::debug;
 use std::fmt::Debug;
-use crate::Terminate;
-use crate::interpreter::Interpreter;
-use crate::compiler::Compiler;
-use crate::operand::Operand;
 
 pub(crate) mod instruction_set {
-    use crate::instruction::{Instruction, HaltInstruction, IncrementInstruction, BranchNotEqualInstruction,
-                PushInstruction, PopInstruction, StoreInstruction, AddInstruction};
+    use crate::instruction::{
+        AddInstruction, BranchNotEqualInstruction, HaltInstruction, IncrementInstruction,
+        Instruction, PopInstruction, PushInstruction, StoreInstruction,
+    };
     use crate::operand::Operand;
 
-    pub fn add(result: &'static Operand, operand1: &'static Operand, operand2: &'static Operand) -> Box<dyn Instruction>{
-        Box::new(AddInstruction { result, operand1, operand2 })
+    pub fn add(
+        result: &'static Operand,
+        operand1: &'static Operand,
+        operand2: &'static Operand,
+    ) -> Box<dyn Instruction> {
+        Box::new(AddInstruction {
+            result,
+            operand1,
+            operand2,
+        })
     }
 
-    pub fn branch_not_equal(test: &'static Operand, value: &'static Operand, jump: usize) -> Box<dyn Instruction>{
+    pub fn branch_not_equal(
+        test: &'static Operand,
+        value: &'static Operand,
+        jump: usize,
+    ) -> Box<dyn Instruction> {
         Box::new(BranchNotEqualInstruction { test, value, jump })
     }
 
-    pub fn halt() -> Box<dyn Instruction>{
+    pub fn halt() -> Box<dyn Instruction> {
         Box::new(HaltInstruction {})
     }
 
-    pub fn increment(result: &'static Operand) -> Box<dyn Instruction>{
+    pub fn increment(result: &'static Operand) -> Box<dyn Instruction> {
         Box::new(IncrementInstruction { result })
     }
 
-    pub fn push(source: &'static Operand) -> Box<dyn Instruction>{
+    pub fn push(source: &'static Operand) -> Box<dyn Instruction> {
         Box::new(PushInstruction { source })
     }
 
-    pub fn pop(result: &'static Operand) -> Box<dyn Instruction>{
+    pub fn pop(result: &'static Operand) -> Box<dyn Instruction> {
         Box::new(PopInstruction { result })
     }
 
-    pub fn store(result: &'static Operand, value: &'static Operand) -> Box<dyn Instruction>{
+    pub fn store(result: &'static Operand, value: &'static Operand) -> Box<dyn Instruction> {
         Box::new(StoreInstruction { result, value })
     }
 }
@@ -65,7 +79,7 @@ macro_rules! addi {
     }}
 }
 
-pub trait Instruction : Debug + ToString {
+pub trait Instruction: Debug + ToString {
     fn interpret(&self, interpreter: &mut Interpreter) -> Result<usize, Terminate>;
     fn compile(&self, compiler: &mut Compiler) -> Result<usize, Terminate>;
     fn jump_location(&self) -> Option<usize> {
@@ -96,20 +110,24 @@ impl Instruction for HaltInstruction {
 
 #[derive(Debug, Clone)]
 struct IncrementInstruction<'a> {
-    result: &'a Operand
+    result: &'a Operand,
 }
 
-impl <'a> ToString for IncrementInstruction<'a> {
+impl<'a> ToString for IncrementInstruction<'a> {
     fn to_string(&self) -> String {
         format!("Increment result: {}", self.result.to_string())
     }
 }
 
-impl <'a> Instruction for IncrementInstruction<'a> {
+impl<'a> Instruction for IncrementInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.value(&self.result);
         machine.store(&self.result, value + 1)?;
-        debug!("REGISTER {:?} is now {}", self.result, machine.value(&self.result));
+        debug!(
+            "REGISTER {:?} is now {}",
+            self.result,
+            machine.value(&self.result)
+        );
         Ok(machine.ipc + 1)
     }
 
@@ -120,23 +138,25 @@ impl <'a> Instruction for IncrementInstruction<'a> {
     }
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 struct BranchNotEqualInstruction<'a> {
     test: &'a Operand,
     value: &'a Operand,
-    jump: usize
+    jump: usize,
 }
 
-impl <'a> ToString for BranchNotEqualInstruction<'a> {
+impl<'a> ToString for BranchNotEqualInstruction<'a> {
     fn to_string(&self) -> String {
-        format!("BranchNotEqual test: {} value: {}, jump: {}",
-                self.test.to_string(),
-                self.value.to_string(),
-                self.jump.to_string())
+        format!(
+            "BranchNotEqual test: {} value: {}, jump: {}",
+            self.test.to_string(),
+            self.value.to_string(),
+            self.jump.to_string()
+        )
     }
 }
 
-impl <'a> Instruction for BranchNotEqualInstruction<'a> {
+impl<'a> Instruction for BranchNotEqualInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let test = machine.value(&self.test);
         let value = machine.value(&self.value);
@@ -170,19 +190,21 @@ impl <'a> Instruction for BranchNotEqualInstruction<'a> {
 struct AddInstruction<'a> {
     operand1: &'a Operand,
     operand2: &'a Operand,
-    result: &'a Operand
+    result: &'a Operand,
 }
 
-impl <'a> ToString for AddInstruction<'a> {
+impl<'a> ToString for AddInstruction<'a> {
     fn to_string(&self) -> String {
-        format!("Add result: {}, operand1: {}, operand2 {}",
-                self.result.to_string(),
-                self.operand1.to_string(),
-                self.operand2.to_string())
+        format!(
+            "Add result: {}, operand1: {}, operand2 {}",
+            self.result.to_string(),
+            self.operand1.to_string(),
+            self.operand2.to_string()
+        )
     }
 }
 
-impl <'a> Instruction for AddInstruction<'a>  {
+impl<'a> Instruction for AddInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let sum = machine.value(&self.operand1) + machine.value(&self.operand2);
         machine.store(&self.result, sum)?;
@@ -204,16 +226,16 @@ impl <'a> Instruction for AddInstruction<'a>  {
 
 #[derive(Debug, Clone)]
 struct PushInstruction<'a> {
-    source: &'a Operand
+    source: &'a Operand,
 }
 
-impl <'a> ToString for PushInstruction<'a> {
+impl<'a> ToString for PushInstruction<'a> {
     fn to_string(&self) -> String {
         format!("Push source: {}", self.source.to_string())
     }
 }
 
-impl <'a> Instruction for PushInstruction<'a> {
+impl<'a> Instruction for PushInstruction<'a> {
     fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.value(self.source);
         machine.stack.push(value);
@@ -228,16 +250,16 @@ impl <'a> Instruction for PushInstruction<'a> {
 
 #[derive(Debug, Clone)]
 struct PopInstruction<'a> {
-    result: &'a Operand
+    result: &'a Operand,
 }
 
-impl <'a> ToString for PopInstruction<'a> {
+impl<'a> ToString for PopInstruction<'a> {
     fn to_string(&self) -> String {
         format!("Pop result: {}", self.result.to_string())
     }
 }
 
-impl <'a> Instruction for PopInstruction<'a> {
+impl<'a> Instruction for PopInstruction<'a> {
     fn interpret(&self, mut machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.stack.pop().unwrap();
         machine.store(&self.result, value)?;
@@ -251,21 +273,22 @@ impl <'a> Instruction for PopInstruction<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct StoreInstruction <'a> {
+struct StoreInstruction<'a> {
     result: &'a Operand,
-    value: &'a Operand
+    value: &'a Operand,
 }
 
-impl <'a> ToString for StoreInstruction<'a> {
+impl<'a> ToString for StoreInstruction<'a> {
     fn to_string(&self) -> String {
-        format!("Store result: {}, value: {}",
-                self.result.to_string(),
-                self.value.to_string(),
+        format!(
+            "Store result: {}, value: {}",
+            self.result.to_string(),
+            self.value.to_string(),
         )
     }
 }
 
-impl <'a> Instruction for StoreInstruction<'a> {
+impl<'a> Instruction for StoreInstruction<'a> {
     fn interpret(&self, machine: &mut Interpreter) -> Result<usize, Terminate> {
         let value = machine.value(self.value);
         machine.store(&self.result, value)?;

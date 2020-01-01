@@ -1,16 +1,16 @@
 extern crate log;
 extern crate simple_logger;
-use log::debug;
-use crate::Terminate;
-use std::process::{Output, Command};
-use std::fs;
 use crate::instruction::Instruction;
 use crate::operand::{Operand, Tag};
+use crate::Terminate;
+use log::debug;
+use std::fs;
+use std::process::{Command, Output};
 
 #[derive(Debug, Clone)]
 pub struct Compiler<'a> {
     program: &'a Vec<Box<dyn Instruction>>,
-    pub output: String
+    pub output: String,
 }
 
 /// Compiler targetting x86(32) nasm.
@@ -24,7 +24,7 @@ impl Compiler<'_> {
         Compiler {
             program: program,
             /// Input to be written out for 'nasm' to assemble.
-            output: String::new()
+            output: String::new(),
         }
     }
 
@@ -45,13 +45,17 @@ impl Compiler<'_> {
     }
 
     fn call_executable(&self) -> Output {
-        let program = Command::new("./xmasvm").output().expect("Could not find xmasvm");
+        let program = Command::new("./xmasvm")
+            .output()
+            .expect("Could not find xmasvm");
         program
     }
 
     pub(crate) fn execute(&mut self) -> Result<Output, Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
-        match simple_logger::init() { _ => {} }
+        match simple_logger::init() {
+            _ => {}
+        }
 
         let labels = self.calculate_labels();
 
@@ -59,7 +63,7 @@ impl Compiler<'_> {
 
         let length = self.program.len();
 
-        for ipc  in 0..length {
+        for ipc in 0..length {
             debug!("EMITTING IPC {}", ipc);
 
             let instruction = &*self.program[ipc];
@@ -71,8 +75,8 @@ impl Compiler<'_> {
             }
 
             match instruction.compile(self) {
-                Ok(_) => {},
-                Err(err) => { return Err(err) }
+                Ok(_) => {}
+                Err(err) => return Err(err),
             }
         }
 
@@ -88,27 +92,35 @@ impl Compiler<'_> {
 
     fn generate_executable(&self) {
         Command::new("nasm")
-            .arg("-f").arg("elf32")
+            .arg("-f")
+            .arg("elf32")
             .arg("xmasvm.asm")
-            .arg("-o").arg("xmasvm.o")
-            .output().expect("Could not execute nasm");
+            .arg("-o")
+            .arg("xmasvm.o")
+            .output()
+            .expect("Could not execute nasm");
 
         Command::new("ld")
-            .arg("-m").arg("elf_i386")
+            .arg("-m")
+            .arg("elf_i386")
             .arg("xmasvm.o")
-            .arg("-o").arg("xmasvm")
-            .output().expect("Count not execute ld");
+            .arg("-o")
+            .arg("xmasvm")
+            .output()
+            .expect("Count not execute ld");
     }
 
     pub(crate) fn native_register_for(&self, operand: &Operand) -> Result<String, Terminate> {
-        if operand.tag == Tag::Literal { return Err(Terminate::RegisterInvalid) }
+        if operand.tag == Tag::Literal {
+            return Err(Terminate::RegisterInvalid);
+        }
 
         match (operand.value, operand.tag) {
-            (0, Tag::Direct) => { Ok("eax".parse().unwrap()) },
-            (0, Tag::Indirect) => { Ok("[eax]".parse().unwrap()) },
-            (1, Tag::Direct) => { Ok("ebx".parse().unwrap()) },
-            (1, Tag::Indirect) => { Ok("[ebx]".parse().unwrap()) },
-            _ => { return Err(Terminate::RegisterInvalid)}
+            (0, Tag::Direct) => Ok("eax".parse().unwrap()),
+            (0, Tag::Indirect) => Ok("[eax]".parse().unwrap()),
+            (1, Tag::Direct) => Ok("ebx".parse().unwrap()),
+            (1, Tag::Indirect) => Ok("[ebx]".parse().unwrap()),
+            _ => return Err(Terminate::RegisterInvalid),
         }
     }
 
@@ -116,8 +128,10 @@ impl Compiler<'_> {
         let register = self.native_register_for(operand);
 
         match register {
-            Err(Terminate::RegisterInvalid) if operand.tag == Tag::Literal =>  { Ok(operand.value.to_string()) },
-            _ => { register }
+            Err(Terminate::RegisterInvalid) if operand.tag == Tag::Literal => {
+                Ok(operand.value.to_string())
+            }
+            _ => register,
         }
     }
 
@@ -128,6 +142,7 @@ impl Compiler<'_> {
     }
 
     fn write_epilogue(&mut self) {
-        self.output.push_str(";;;;; Pushed with xmasvm...ho ho ho\n");
+        self.output
+            .push_str(";;;;; Pushed with xmasvm...ho ho ho\n");
     }
 }
