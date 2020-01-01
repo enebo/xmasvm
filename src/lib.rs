@@ -212,6 +212,28 @@ pub struct Compiler<'a> {
     output: String
 }
 
+macro_rules! addi_expand {
+    ($str:expr, ($arg:expr,)) => {{
+        $str.push_str($arg);
+        $str.push('\n');
+    }};
+
+    ($str:expr, ($arg:expr, $($rest:expr,)*)) => {{
+        $str.push_str($arg);
+        $str.push_str(", ");
+        addi_expand!($str, ($($rest,)*))
+    }};
+}
+
+macro_rules! addi {
+    ($str:expr, $instr:expr, $($e:expr),*) => {{
+        $str.push_str("    ");
+        $str.push_str($instr);
+        $str.push(' ');
+        addi_expand!($str, ($($e,)*))
+    }}
+}
+
 /// Compiler targetting x86(32) nasm.
 ///
 /// The instruction set was pretty arbitrarily chosen and intentionally not exactly
@@ -320,25 +342,7 @@ impl Compiler<'_> {
         }
     }
 
-    // FIXME: Feels these two should be combined into variadic function
     // FIXME: Allow optional comment as parameter
-    fn add_instr(&mut self, x86instr: &str, operand: &str) {
-        self.output.push_str("    ");
-        self.output.push_str(x86instr);
-        self.output.push(' ');
-        self.output.push_str(operand);
-        self.output.push('\n');
-    }
-
-    fn add_instr_two(&mut self, x86instr: &str, operand1: &str, operand2: &str) {
-        self.output.push_str("    ");
-        self.output.push_str(x86instr);
-        self.output.push(' ');
-        self.output.push_str(operand1);
-        self.output.push_str(", ");
-        self.output.push_str(operand2);
-        self.output.push('\n');
-    }
 
     fn write_prologue(&mut self) {
         self.output.push_str("global _start\n");
@@ -489,7 +493,7 @@ impl <'a> Instruction for IncrementInstruction<'a> {
 
     fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
         let register = machine.native_register_for(self.result).unwrap();
-        machine.add_instr("inc", register.as_str());
+        addi!(machine.output, "inc", register.as_str());
         Ok(0)
     }
 }
@@ -521,8 +525,8 @@ impl <'a> Instruction for BranchNotEqualInstruction<'a> {
         jump_string.push('_');
         jump_string.push_str(self.jump.to_string().as_str());
 
-        machine.add_instr_two("cmp", test.as_str(), value.as_str());
-        machine.add_instr("jne", jump_string.as_str());
+        addi!(machine.output, "cmp", test.as_str(), value.as_str());
+        addi!(machine.output, "jne", jump_string.as_str());
 
         Ok(0)
     }
@@ -553,9 +557,9 @@ impl <'a> Instruction for AddInstruction<'a>  {
         let operand2 = machine.native_register_or_value(self.operand2).unwrap();
 
         if result != operand1 {
-            machine.add_instr_two("mov", result.as_str(), operand1.as_str());
+            addi!(machine.output, "mov", result.as_str(), operand1.as_str());
         }
-        machine.add_instr_two("add", result.as_str(), operand2.as_str());
+        addi!(machine.output, "add", result.as_str(), operand2.as_str());
         Ok(0)
     }
 }
