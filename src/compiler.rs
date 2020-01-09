@@ -9,7 +9,9 @@ use std::process::{Command, Output};
 
 #[derive(Debug, Clone)]
 pub struct Compiler<'a> {
-    program: &'a Vec<Box<dyn Instruction>>,
+    /// List of instructions we are going to translate
+    program: &'a [Box<dyn Instruction>],
+    /// The nasm program we will generate
     pub output: String,
 }
 
@@ -20,9 +22,9 @@ pub struct Compiler<'a> {
 /// up mapping to eax.  If for some reason an x86 instr ends up putting something into
 /// eax then it may wipe out our original user of register 0.
 impl Compiler<'_> {
-    pub(crate) fn new<'a>(program: &'a Vec<Box<dyn Instruction>>) -> Compiler {
+    pub(crate) fn new<'a>(program: &'a [Box<dyn Instruction>]) -> Compiler {
         Compiler {
-            program: program,
+            program,
             /// Input to be written out for 'nasm' to assemble.
             output: String::new(),
         }
@@ -44,13 +46,14 @@ impl Compiler<'_> {
         labels
     }
 
+    /// Try and execute the nasm file we compiled to an executable.
     fn call_executable(&self) -> Output {
-        let program = Command::new("./xmasvm")
+        Command::new("./xmasvm")
             .output()
-            .expect("Could not find xmasvm");
-        program
+            .expect("Could not find xmasvm")
     }
 
+    /// Compile our program to nasm.
     pub(crate) fn execute(&mut self) -> Result<Output, Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
         match simple_logger::init() {
@@ -61,14 +64,12 @@ impl Compiler<'_> {
 
         self.write_prologue();
 
-        let length = self.program.len();
-
-        for ipc in 0..length {
+        for (ipc, label) in labels.iter().enumerate() {
             debug!("EMITTING IPC {}", ipc);
 
             let instruction = &*self.program[ipc];
 
-            if labels[ipc] != 0 {
+            if *label != 0 {
                 self.output.push_str("\n_");
                 self.output.push_str(ipc.to_string().as_ref());
                 self.output.push_str(":\n");
@@ -90,6 +91,7 @@ impl Compiler<'_> {
         Ok(self.call_executable())
     }
 
+    /// Assemble and link our program.
     fn generate_executable(&self) {
         Command::new("nasm")
             .arg("-f")
@@ -110,20 +112,22 @@ impl Compiler<'_> {
             .expect("Count not execute ld");
     }
 
+    /// Given a virtual machine operand which x86 instr should we use?...or die tryin'
     pub(crate) fn native_register_for(&self, operand: &Operand) -> Result<String, Terminate> {
         if operand.tag == Tag::Literal {
             return Err(Terminate::RegisterInvalid);
         }
 
         match (operand.value, operand.tag) {
-            (0, Tag::Direct) => Ok("eax".parse().unwrap()),
-            (0, Tag::Indirect) => Ok("[eax]".parse().unwrap()),
-            (1, Tag::Direct) => Ok("ebx".parse().unwrap()),
-            (1, Tag::Indirect) => Ok("[ebx]".parse().unwrap()),
-            _ => return Err(Terminate::RegisterInvalid),
+            (0, Tag::Direct) => Ok("eax".to_string()),
+            (0, Tag::Indirect) => Ok("[eax]".to_string()),
+            (1, Tag::Direct) => Ok("ebx".to_string()),
+            (1, Tag::Indirect) => Ok("[ebx]".to_string()),
+            _ => Err(Terminate::RegisterInvalid),
         }
     }
 
+    /// Given a virtual machine operand which value or x86 register should we use.
     pub(crate) fn native_register_or_value(&self, operand: &Operand) -> Result<String, Terminate> {
         let register = self.native_register_for(operand);
 

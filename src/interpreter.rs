@@ -14,12 +14,12 @@ pub struct Interpreter<'a> {
     registers: Registers,
     /// Stack
     pub(crate) stack: Vec<i32>,
-
-    program: &'a Vec<Box<dyn Instruction>>,
+    /// List of instructions we are interpreting
+    program: &'a [Box<dyn Instruction>],
 }
 
 impl Interpreter<'_> {
-    pub(crate) fn new<'a>(program: &'a Vec<Box<dyn Instruction>>) -> Interpreter {
+    pub(crate) fn new<'a>(program: &'a [Box<dyn Instruction>]) -> Interpreter {
         Interpreter {
             ipc: 0,
             sp: 0,
@@ -29,6 +29,8 @@ impl Interpreter<'_> {
         }
     }
 
+    /// Execute the program associated with this intepreter.
+    /// Note: This is not restartable.  You can only call execute once.
     pub(crate) fn execute(&mut self) -> Result<(), Terminate> {
         // FIXME: init can only be called once to init so just ignore errors.  Ultimately, this should be passed in.
         match simple_logger::init() {
@@ -61,10 +63,11 @@ impl Interpreter<'_> {
                 self.ipc = new_ipc;
                 Ok(())
             }
-            Err(err) => return Err(err),
+            Err(err) => Err(err)
         }
     }
 
+    /// Execute n instructions before stopping
     pub(crate) fn step_n(&mut self, count: usize) -> Result<(), Terminate> {
         for _ in 0..count {
             if let Err(err) = self.step() {
@@ -75,6 +78,7 @@ impl Interpreter<'_> {
         Ok(())
     }
 
+    /// What is the contents of the register at location specified.
     pub(crate) fn register_read(&self, register: usize) -> Result<i32, Terminate> {
         if register > REGISTERS_SIZE {
             Err(Terminate::RegisterInvalid)
@@ -83,6 +87,8 @@ impl Interpreter<'_> {
         }
     }
 
+    /// What is at the current stack element or delta elements above/below the current stack
+    /// element.
     pub(crate) fn stack_peek(&self, delta: i32) -> Result<i32, Terminate> {
         // FIXME: This will panic once we exceed i32 should Err(StackOverflow) instead
         let index: i32 = self.sp as i32 - delta - 1;
@@ -94,10 +100,12 @@ impl Interpreter<'_> {
         }
     }
 
+    /// How many elements are currently pushed on the stack.
     pub(crate) fn stack_size(&self) -> usize {
         self.sp
     }
 
+    /// What is the value associated with this operand.
     pub(crate) fn value(&self, operand: &Operand) -> i32 {
         match operand.tag {
             Tag::Direct => self.registers[operand.value as usize],
@@ -106,6 +114,7 @@ impl Interpreter<'_> {
         }
     }
 
+    /// Store value at the specified operand...or die tryin'.
     pub(crate) fn store(&mut self, operand: &Operand, value: i32) -> Result<i32, Terminate> {
         match operand.tag {
             Tag::Direct => self.registers[operand.value as usize] = value,

@@ -80,8 +80,11 @@ macro_rules! addi {
 }
 
 pub trait Instruction: Debug + ToString {
+    /// interpret this instruction
     fn interpret(&self, interpreter: &mut Interpreter) -> Result<usize, Terminate>;
+    /// compile/translate this instruction to x86 nasm assembly
     fn compile(&self, compiler: &mut Compiler) -> Result<usize, Terminate>;
+    /// This instruction may jump...but where?  For label generation in the compiler.
     fn jump_location(&self) -> Option<usize> {
         None
     }
@@ -92,7 +95,7 @@ struct HaltInstruction {}
 
 impl ToString for HaltInstruction {
     fn to_string(&self) -> String {
-        "Halt".parse().unwrap()
+        "Halt".to_string()
     }
 }
 
