@@ -228,6 +228,37 @@ impl<'a> Instruction for AddInstruction<'a> {
 }
 
 #[derive(Debug, Clone)]
+struct CallInstruction {
+    jump: usize,
+}
+
+impl ToString for CallInstruction {
+    fn to_string(&self) -> String {
+        format!("Call jump: _{}", self.jump.to_string());
+    }
+}
+
+impl Instruction for CallInstruction {
+    fn interpret(&self, mut _machine: &mut Interpreter) -> Result<usize, Terminate> {
+        Ok(0)
+    }
+
+    // FIXME: impl ret and label
+    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
+        let mut jump_string = String::new();
+
+        addi!(self, machine, "push", "ebp");
+        jump_string.push('_');
+        jump_string.push_str(self.jump.to_string().as_str());
+        addi!(self, machine, "call", jump_string.as_str());
+    }
+
+    fn jump_location(&self) -> Option<usize> {
+        Some(self.jump)
+    }
+}
+
+#[derive(Debug, Clone)]
 struct PushInstruction<'a> {
     source: &'a Operand,
 }
@@ -246,8 +277,10 @@ impl<'a> Instruction for PushInstruction<'a> {
         Ok(machine.ipc + 1)
     }
 
-    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
-        Err(Terminate::Unimplemented)
+    fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
+        let value = machine.native_register_or_value(&self.source).unwrap();
+        addi!(self, machine, "push", value.as_str());
+        Ok(0)
     }
 }
 
@@ -270,8 +303,10 @@ impl<'a> Instruction for PopInstruction<'a> {
         Ok(machine.ipc + 1)
     }
 
-    fn compile(&self, _machine: &mut Compiler) -> Result<usize, Terminate> {
-        Err(Terminate::Unimplemented)
+    fn compile(&self, machine: &mut Compiler) -> Result<usize, Terminate> {
+        let result = machine.native_register_for(&self.result).unwrap();
+        addi!(self, machine, "pop", result.as_str());
+        Ok(0)
     }
 }
 

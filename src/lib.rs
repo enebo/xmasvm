@@ -184,6 +184,21 @@ mod tests {
     }
 
     #[test]
+    fn test_compiler_push_pop() {
+        let b = direct!(1);
+        let program: &Vec<Box<dyn Instruction>> = &vec![
+            increment(b),  // S:.;  a = 1
+            push(b),       // S: 1.
+            increment(b),  // S: 1; a = 2
+            pop(b),        // S:.;  a = 1
+            halt(),
+        ];
+        let mut compiler = Compiler::new(program);
+
+        assert_eq!(compiler.execute().unwrap().status.code().unwrap(), 1);
+    }
+
+    #[test]
     fn test_interpreter_push_pop() {
         let a = direct!(0);
         let b = direct!(1);
